@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NectarTrace USSD Simulator</title>
+  <style>
+    body { font-family: monospace; max-width: 500px; margin: 50px auto; padding: 20px; background: #f5f5f5; }
+    h1 { color: #b45309; }
+    .screen { background: #fff; border: 2px solid #b45309; border-radius: 8px; padding: 20px; min-height: 200px; margin: 20px 0; white-space: pre-wrap; }
+    input, button { font-family: monospace; padding: 10px; font-size: 16px; width: 100%; box-sizing: border-box; margin: 5px 0; }
+    button { background: #b45309; color: white; border: none; cursor: pointer; border-radius: 4px; }
+    button:hover { background: #92400e; }
+    .info { color: #666; font-size: 12px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>🍯 NectarTrace USSD Simulator</h1>
+  
+  <div class="screen" id="screen">Dialing *483#...</div>
+  
+  <input type="text" id="input" placeholder="Enter option (e.g., 1, 1*15)" />
+  <button onclick="send()">Send</button>
+  <button onclick="reset()" style="background: #666;">Reset Session</button>
+
+  <div class="info">
+    <p><strong>Test phone numbers:</strong> Use the ones you registered in the backend.</p>
+    <p><strong>Flow:</strong> Empty → main menu. "1" → ask weight. "1*15" → record 15kg.</p>
+  </div>
+
+  <script>
+    const phoneNumber = '+254700000001'; // Change to your test user
+    let sessionId = 'sim-' + Date.now();
+    let textHistory = '';
+
+    async function send() {
+      const input = document.getElementById('input').value.trim();
+      
+      // Build cumulative text (Africa's Talking style)
+      if (textHistory === '') {
+        textHistory = input;
+      } else {
+        textHistory = textHistory + '*' + input;
+      }
+
+      const response = await fetch('http://localhost:5000/api/ussd', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          phoneNumber,
+          text: textHistory,
+        }),
+      });
+
+      const text = await response.text();
+      document.getElementById('screen').textContent = text;
+      document.getElementById('input').value = '';
+
+      // If response starts with END, session is over
+      if (text.startsWith('END')) {
+        setTimeout(reset, 2000);
+      }
+    }
+
+    function reset() {
+      sessionId = 'sim-' + Date.now();
+      textHistory = '';
+      document.getElementById('screen').textContent = 'Dialing *483#...';
+      document.getElementById('input').value = '';
+    }
+
+    // Initial dial
+    async function dial() {
+      const response = await fetch('http://localhost:5000/api/ussd', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          phoneNumber,
+          text: '',
+        }),
+      });
+      const text = await response.text();
+      document.getElementById('screen').textContent = text;
+    }
+    dial();
+  </script>
+</body>
+</html>

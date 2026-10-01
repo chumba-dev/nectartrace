@@ -66,6 +66,7 @@ model User {
 
   cooperative    Cooperative? @relation(fields: [cooperativeId], references: [id])
   orders         Order[]      @relation("BuyerOrders")
+  harvestLogs    HarvestLog[]
 
   @@index([cooperativeId])
 }
@@ -141,4 +142,47 @@ model PriceHistory {
 
   @@index([grade])
   @@index([recordedAt])
+}
+
+
+// ============================================
+// USSD MODELS
+// ============================================
+
+model HarvestLog {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  weightKg    Float
+  loggedVia   String   @default("USSD")
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model UssdSession {
+  id          String   @id
+  phoneNumber String
+  currentStep String?
+  data        Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([phoneNumber])
+}
+
+model SmsLog {
+  id          Int      @id @default(autoincrement())
+  phoneNumber String
+  message     String
+  status      String   @default("sent")
+  provider    String   @default("africastalking")
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@index([phoneNumber])
+  @@index([createdAt])
 }
