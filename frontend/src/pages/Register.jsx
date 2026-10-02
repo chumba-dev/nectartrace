@@ -21,8 +21,9 @@ export default function Register() {
     console.log('Register:', form);
   };
 
-  const inputClass = "w-full px-4 py-3 bg-obsidian border border-dust/20 rounded-md text-ivory placeholder:text-dust/50 focus:border-beeswax focus:outline-none transition-colors";
-  const labelClass = "block text-sm text-dust mb-2";
+  const inputClass =
+    'w-full px-4 py-3 bg-obsidian border border-dust/20 rounded-md text-ivory placeholder:text-dust/50 focus:border-beeswax focus:outline-none transition-colors';
+  const labelClass = 'block text-sm text-dust mb-2';
 
   return (
     <div className="container-content py-24 flex items-center justify-center min-h-[70vh]">

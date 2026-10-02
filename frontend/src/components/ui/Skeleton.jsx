@@ -13,7 +13,9 @@ export default function Skeleton({ className = '', variant = 'text' }) {
         animate-pulse 
         ${variants[variant]} 
         ${className}
-      `.trim().replace(/\s+/g, ' ')}
+      `
+        .trim()
+        .replace(/\s+/g, ' ')}
     />
   );
 }

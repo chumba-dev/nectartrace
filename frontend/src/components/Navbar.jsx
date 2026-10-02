@@ -50,7 +50,14 @@ export default function Navbar() {
           className="md:hidden p-2 text-ivory"
           aria-label="Toggle menu"
         >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             {open ? (
               <>
                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -71,13 +78,25 @@ export default function Navbar() {
       {open && (
         <div className="md:hidden border-t border-dust/10 bg-obsidian">
           <div className="container-content py-6 flex flex-col gap-4">
-            <NavLink to="/marketplace" className={navLinkClass} onClick={() => setOpen(false)}>
+            <NavLink
+              to="/marketplace"
+              className={navLinkClass}
+              onClick={() => setOpen(false)}
+            >
               Marketplace
             </NavLink>
-            <NavLink to="/verify" className={navLinkClass} onClick={() => setOpen(false)}>
+            <NavLink
+              to="/verify"
+              className={navLinkClass}
+              onClick={() => setOpen(false)}
+            >
               Verify
             </NavLink>
-            <NavLink to="/dashboard" className={navLinkClass} onClick={() => setOpen(false)}>
+            <NavLink
+              to="/dashboard"
+              className={navLinkClass}
+              onClick={() => setOpen(false)}
+            >
               Dashboard
             </NavLink>
             <div className="flex gap-3 pt-4 border-t border-dust/10">

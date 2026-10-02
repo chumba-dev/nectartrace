@@ -6,7 +6,9 @@ export default function Card({ children, className = '', hover = false }) {
     overflow-hidden
     ${hover ? 'transition-all duration-200 hover:border-dust/30 hover:-translate-y-0.5' : ''}
     ${className}
-  `.trim().replace(/\s+/g, ' ');
+  `
+    .trim()
+    .replace(/\s+/g, ' ');
 
   return <div className={baseStyles}>{children}</div>;
 }

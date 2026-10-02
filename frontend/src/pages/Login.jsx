@@ -26,7 +26,9 @@ export default function Login() {
         <Card className="p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
-              <label className="block text-sm text-dust mb-2">Phone number</label>
+              <label className="block text-sm text-dust mb-2">
+                Phone number
+              </label>
               <input
                 type="tel"
                 value={phone}

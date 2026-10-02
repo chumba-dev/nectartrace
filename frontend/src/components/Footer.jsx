@@ -9,7 +9,9 @@ export default function Footer() {
           <div className="md:col-span-2">
             <div className="flex items-center gap-2 mb-4">
               <span className="w-2 h-2 rounded-full bg-beeswax" />
-              <span className="font-display text-xl text-ivory">NectarTrace</span>
+              <span className="font-display text-xl text-ivory">
+                NectarTrace
+              </span>
             </div>
             <p className="text-dust text-sm max-w-md text-pretty">
               Verified Baringo honey, traced from hive to jar on the blockchain.
@@ -23,9 +25,24 @@ export default function Footer() {
               Product
             </h4>
             <ul className="space-y-2 text-sm text-dust">
-              <li><Link to="/marketplace" className="hover:text-beeswax transition">Marketplace</Link></li>
-              <li><Link to="/verify" className="hover:text-beeswax transition">Verify a batch</Link></li>
-              <li><Link to="/dashboard" className="hover:text-beeswax transition">For cooperatives</Link></li>
+              <li>
+                <Link
+                  to="/marketplace"
+                  className="hover:text-beeswax transition"
+                >
+                  Marketplace
+                </Link>
+              </li>
+              <li>
+                <Link to="/verify" className="hover:text-beeswax transition">
+                  Verify a batch
+                </Link>
+              </li>
+              <li>
+                <Link to="/dashboard" className="hover:text-beeswax transition">
+                  For cooperatives
+                </Link>
+              </li>
             </ul>
           </div>
 
@@ -35,9 +52,21 @@ export default function Footer() {
               About
             </h4>
             <ul className="space-y-2 text-sm text-dust">
-              <li><a href="#" className="hover:text-beeswax transition">How it works</a></li>
-              <li><a href="#" className="hover:text-beeswax transition">Our story</a></li>
-              <li><a href="#" className="hover:text-beeswax transition">Contact</a></li>
+              <li>
+                <a href="#" className="hover:text-beeswax transition">
+                  How it works
+                </a>
+              </li>
+              <li>
+                <a href="#" className="hover:text-beeswax transition">
+                  Our story
+                </a>
+              </li>
+              <li>
+                <a href="#" className="hover:text-beeswax transition">
+                  Contact
+                </a>
+              </li>
             </ul>
           </div>
         </div>

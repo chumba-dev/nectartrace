@@ -5,7 +5,11 @@ const variants = {
   default: 'bg-stone text-ivory border-dust/20',
 };
 
-export default function Badge({ children, variant = 'default', className = '' }) {
+export default function Badge({
+  children,
+  variant = 'default',
+  className = '',
+}) {
   const baseStyles = `
     inline-flex items-center gap-1.5
     px-2.5 py-1
@@ -13,7 +17,9 @@ export default function Badge({ children, variant = 'default', className = '' })
     border rounded-full
     ${variants[variant]}
     ${className}
-  `.trim().replace(/\s+/g, ' ');
+  `
+    .trim()
+    .replace(/\s+/g, ' ');
 
   return <span className={baseStyles}>{children}</span>;
 }

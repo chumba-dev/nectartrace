@@ -4,7 +4,8 @@ const variants = {
   primary: 'bg-beeswax text-obsidian hover:bg-beeswax/90 active:bg-beeswax/80',
   secondary: 'bg-stone text-ivory hover:bg-stone/80 border border-dust/20',
   ghost: 'bg-transparent text-ivory hover:bg-stone/50',
-  outline: 'bg-transparent text-beeswax border border-beeswax hover:bg-beeswax hover:text-obsidian',
+  outline:
+    'bg-transparent text-beeswax border border-beeswax hover:bg-beeswax hover:text-obsidian',
 };
 
 const sizes = {
@@ -31,7 +32,9 @@ export default function Button({
     ${variants[variant]}
     ${sizes[size]}
     ${className}
-  `.trim().replace(/\s+/g, ' ');
+  `
+    .trim()
+    .replace(/\s+/g, ' ');
 
   if (to) {
     return (
