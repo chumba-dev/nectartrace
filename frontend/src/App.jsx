@@ -4,6 +4,10 @@ import ScrollToTop from './components/ScrollToTop';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import Marketplace from './pages/Marketplace';
+import Verify from './pages/Verify';
+import Dashboard from './pages/Dashboard';
+import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
   return (
@@ -14,6 +18,16 @@ function App() {
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/marketplace" element={<Marketplace />} />
+          <Route path="/verify" element={<Verify />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute allowedRoles={['COOPERATIVE_STAFF', 'ADMIN']}>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
         </Route>
       </Routes>
     </BrowserRouter>
