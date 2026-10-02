@@ -1,24 +1,39 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
+import { useAuth } from '../context/AuthContext';
 
 export default function Register() {
+  const navigate = useNavigate();
+  const { register } = useAuth();
+
   const [form, setForm] = useState({
     name: '',
     phone: '',
     password: '',
     role: 'BUYER',
   });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // TODO: Wire up API in Phase 5.6
-    console.log('Register:', form);
+    setError('');
+    setLoading(true);
+
+    try {
+      await register(form);
+      navigate('/');
+    } catch (err) {
+      setError(err.message || 'Registration failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const inputClass =
@@ -37,6 +52,12 @@ export default function Register() {
 
         <Card className="p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
+            {error && (
+              <div className="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-md">
+                {error}
+              </div>
+            )}
+
             <div>
               <label className={labelClass}>Full name</label>
               <input
@@ -97,8 +118,13 @@ export default function Register() {
               </div>
             </div>
 
-            <Button type="submit" size="lg" className="w-full">
-              Create account
+            <Button
+              type="submit"
+              size="lg"
+              className="w-full"
+              disabled={loading}
+            >
+              {loading ? 'Creating account...' : 'Create account'}
             </Button>
           </form>
 

@@ -1,9 +1,18 @@
 import { useState } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import Button from './ui/Button';
+import { useAuth } from '../context/AuthContext';
 
 export default function Navbar() {
   const [open, setOpen] = useState(false);
+  const { user, isAuthenticated, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    logout();
+    navigate('/');
+    setOpen(false);
+  };
 
   const navLinkClass = ({ isActive }) =>
     `text-sm font-body transition-colors ${
@@ -13,7 +22,6 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-50 bg-obsidian/95 backdrop-blur-sm border-b border-dust/10">
       <nav className="container-content flex items-center justify-between h-16 md:h-20">
-        {/* Wordmark */}
         <Link to="/" className="flex items-center gap-2 group">
           <span className="w-2 h-2 rounded-full bg-beeswax group-hover:scale-125 transition-transform" />
           <span className="font-display text-xl text-ivory tracking-tight">
@@ -21,7 +29,6 @@ export default function Navbar() {
           </span>
         </Link>
 
-        {/* Desktop nav */}
         <div className="hidden md:flex items-center gap-8">
           <NavLink to="/marketplace" className={navLinkClass}>
             Marketplace
@@ -29,22 +36,35 @@ export default function Navbar() {
           <NavLink to="/verify" className={navLinkClass}>
             Verify
           </NavLink>
-          <NavLink to="/dashboard" className={navLinkClass}>
-            Dashboard
-          </NavLink>
+          {user?.role === 'COOPERATIVE_STAFF' && (
+            <NavLink to="/dashboard" className={navLinkClass}>
+              Dashboard
+            </NavLink>
+          )}
         </div>
 
-        {/* Desktop CTA */}
         <div className="hidden md:flex items-center gap-3">
-          <Button variant="ghost" size="sm" to="/login">
-            Sign in
-          </Button>
-          <Button size="sm" to="/register">
-            Get started
-          </Button>
+          {isAuthenticated ? (
+            <>
+              <span className="text-sm text-dust">
+                {user.name}
+              </span>
+              <Button variant="ghost" size="sm" onClick={handleLogout}>
+                Sign out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" to="/login">
+                Sign in
+              </Button>
+              <Button size="sm" to="/register">
+                Get started
+              </Button>
+            </>
+          )}
         </div>
 
-        {/* Mobile hamburger */}
         <button
           onClick={() => setOpen(!open)}
           className="md:hidden p-2 text-ivory"
@@ -74,38 +94,40 @@ export default function Navbar() {
         </button>
       </nav>
 
-      {/* Mobile menu */}
       {open && (
         <div className="md:hidden border-t border-dust/10 bg-obsidian">
           <div className="container-content py-6 flex flex-col gap-4">
-            <NavLink
-              to="/marketplace"
-              className={navLinkClass}
-              onClick={() => setOpen(false)}
-            >
+            <NavLink to="/marketplace" className={navLinkClass} onClick={() => setOpen(false)}>
               Marketplace
             </NavLink>
-            <NavLink
-              to="/verify"
-              className={navLinkClass}
-              onClick={() => setOpen(false)}
-            >
+            <NavLink to="/verify" className={navLinkClass} onClick={() => setOpen(false)}>
               Verify
             </NavLink>
-            <NavLink
-              to="/dashboard"
-              className={navLinkClass}
-              onClick={() => setOpen(false)}
-            >
-              Dashboard
-            </NavLink>
+            {user?.role === 'COOPERATIVE_STAFF' && (
+              <NavLink to="/dashboard" className={navLinkClass} onClick={() => setOpen(false)}>
+                Dashboard
+              </NavLink>
+            )}
             <div className="flex gap-3 pt-4 border-t border-dust/10">
-              <Button variant="ghost" size="sm" to="/login" className="flex-1">
-                Sign in
-              </Button>
-              <Button size="sm" to="/register" className="flex-1">
-                Get started
-              </Button>
+              {isAuthenticated ? (
+                <>
+                  <p className="flex-1 text-sm text-dust self-center">
+                    {user.name}
+                  </p>
+                  <Button variant="ghost" size="sm" onClick={handleLogout}>
+                    Sign out
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="ghost" size="sm" to="/login" className="flex-1">
+                    Sign in
+                  </Button>
+                  <Button size="sm" to="/register" className="flex-1">
+                    Get started
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </div>
