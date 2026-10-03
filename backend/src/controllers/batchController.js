@@ -1,6 +1,8 @@
 const prisma = require('../config/db');
 const blockchain = require('../config/blockchain');
 const logger = require('../utils/logger');
+const QRCode = require('qrcode');
+const env = require('../config/env');
 
 // POST /api/batches
 // Staff only — records batch in DB + blockchain
@@ -268,4 +270,49 @@ module.exports = {
   verifyBatch,
   getMyBatches,
   updateStatus,
+  getBatchQR,
 };
+
+
+// GET /api/batches/:batchId/qr
+async function getBatchQR(req, res, next) {
+  try {
+    const { batchId } = req.params;
+
+    // Verify batch exists
+    const batch = await prisma.honeyBatch.findUnique({
+      where: { batchId },
+    });
+
+    if (!batch) {
+      return res.status(404).json({
+        success: false,
+        message: 'Batch not found',
+      });
+    }
+
+    // Generate QR pointing to frontend verify page
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const verifyUrl = `${frontendUrl}/verify?batchId=${batchId}`;
+
+    const qrDataUrl = await QRCode.toDataURL(verifyUrl, {
+      width: 400,
+      margin: 2,
+      color: {
+        dark: '#0D0D0D',
+        light: '#F5F0E8',
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        batchId,
+        verifyUrl,
+        qrDataUrl,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}

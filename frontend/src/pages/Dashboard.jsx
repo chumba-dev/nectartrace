@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { batchesApi, cooperativesApi, listingsApi } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import Card from '../components/ui/Card';
@@ -8,11 +8,54 @@ import VerifiedBadge from '../components/ui/VerifiedBadge';
 import MonoText from '../components/ui/MonoText';
 import Skeleton from '../components/ui/Skeleton';
 import EmptyState from '../components/ui/EmptyState';
+import Modal from '../components/ui/Modal';
+import BatchRegisterModal from '../components/BatchRegisterModal';
+
+function QRCodeModal({ batchId, onClose }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['qr', batchId],
+    queryFn: () => batchesApi.qr(batchId).then((res) => res.data.data),
+    enabled: !!batchId,
+  });
+
+  if (!batchId) return null;
+
+  return (
+    <Modal isOpen={!!batchId} onClose={onClose} title={`QR - ${batchId}`}>
+      {isLoading ? (
+        <Skeleton variant="card" className="aspect-square" />
+      ) : (
+        <div className="text-center">
+          <img
+            src={data.qrDataUrl}
+            alt={`QR code for batch ${batchId}`}
+            className="mx-auto rounded-lg"
+          />
+          <p className="text-xs text-dust mt-4 font-mono break-all">
+            {data.verifyUrl}
+          </p>
+          <a
+            href={data.qrDataUrl}
+            download={`${batchId}-qr.png`}
+            className="inline-block mt-4 text-beeswax hover:underline text-sm"
+          >
+            Download PNG
+          </a>
+        </div>
+      )}
+    </Modal>
+  );
+}
 
 export default function Dashboard() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [showNewBatch, setShowNewBatch] = useState(false);
+  const [qrBatchId, setQrBatchId] = useState(null);
+
+  useEffect(() => {
+    document.title = 'Dashboard — NectarTrace';
+  }, []);
 
   // Fetch stats
   const { data: stats } = useQuery({
@@ -134,6 +177,13 @@ export default function Dashboard() {
                       </MonoText>
                     )}
                   </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setQrBatchId(batch.batchId)}
+                  >
+                    View QR
+                  </Button>
                 </div>
               </Card>
             ))}
@@ -142,6 +192,14 @@ export default function Dashboard() {
       </div>
 
       {/* TODO: New batch modal (next phase) */}
+      <BatchRegisterModal
+        isOpen={showNewBatch}
+        onClose={() => setShowNewBatch(false)}
+      />
+      <QRCodeModal
+        batchId={qrBatchId}
+        onClose={() => setQrBatchId(null)}
+      />
     </div>
   );
 }

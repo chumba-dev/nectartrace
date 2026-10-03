@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
@@ -16,6 +16,10 @@ export default function Register() {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    document.title = 'Register — NectarTrace';
+  }, []);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
@@ -13,6 +13,10 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    document.title = 'Login — NectarTrace';
+  }, []);
 
   const from = location.state?.from?.pathname || '/';
 

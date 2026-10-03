@@ -1,9 +1,14 @@
+import { useEffect } from 'react';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import VerifiedBadge from '../components/ui/VerifiedBadge';
 import MonoText from '../components/ui/MonoText';
 
 export default function Landing() {
+  useEffect(() => {
+    document.title = 'NectarTrace';
+  }, []);
+
   return (
     <div>
       {/* HERO — Full bleed */}

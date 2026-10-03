@@ -5,3 +5,4 @@ export { default as VerifiedBadge } from './VerifiedBadge';
 export { default as MonoText } from './MonoText';
 export { default as Skeleton } from './Skeleton';
 export { default as EmptyState } from './EmptyState';
+export { default as Modal } from './Modal';

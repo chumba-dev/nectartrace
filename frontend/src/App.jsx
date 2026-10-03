@@ -8,6 +8,9 @@ import Marketplace from './pages/Marketplace';
 import Verify from './pages/Verify';
 import Dashboard from './pages/Dashboard';
 import ProtectedRoute from './components/ProtectedRoute';
+import ListingDetail from './pages/ListingDetail';
+import Orders from './pages/Orders';
+import NotFound from './pages/NotFound';
 
 function App() {
   return (
@@ -20,11 +23,21 @@ function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/marketplace" element={<Marketplace />} />
           <Route path="/verify" element={<Verify />} />
+          <Route path="/listings/:id" element={<ListingDetail />} />
+          <Route path="*" element={<NotFound />} />
           <Route
             path="/dashboard"
             element={
               <ProtectedRoute allowedRoles={['COOPERATIVE_STAFF', 'ADMIN']}>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/orders"
+            element={
+              <ProtectedRoute>
+                <Orders />
               </ProtectedRoute>
             }
           />

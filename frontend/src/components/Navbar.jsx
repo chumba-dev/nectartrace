@@ -63,6 +63,11 @@ export default function Navbar() {
               </Button>
             </>
           )}
+          {isAuthenticated && (
+            <NavLink to="/orders" className={navLinkClass}>
+              Orders
+            </NavLink>
+          )}
         </div>
 
         <button
@@ -106,6 +111,11 @@ export default function Navbar() {
             {user?.role === 'COOPERATIVE_STAFF' && (
               <NavLink to="/dashboard" className={navLinkClass} onClick={() => setOpen(false)}>
                 Dashboard
+              </NavLink>
+            )}
+            {isAuthenticated && (
+              <NavLink to="/orders" className={navLinkClass} onClick={() => setOpen(false)}>
+                Orders
               </NavLink>
             )}
             <div className="flex gap-3 pt-4 border-t border-dust/10">

@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { listingsApi } from '../lib/api';
 import Card from '../components/ui/Card';
@@ -9,6 +10,10 @@ import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
 
 export default function Marketplace() {
+  useEffect(() => {
+    document.title = 'Marketplace — NectarTrace';
+  }, []);
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['listings'],
     queryFn: () => listingsApi.list().then((res) => res.data.data),

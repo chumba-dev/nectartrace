@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { batchesApi } from '../lib/api';
 import Card from '../components/ui/Card';
@@ -6,9 +6,16 @@ import Button from '../components/ui/Button';
 import VerifiedBadge from '../components/ui/VerifiedBadge';
 import MonoText from '../components/ui/MonoText';
 import Badge from '../components/ui/Badge';
+import QRScanner from '../components/QRScanner';
+import { useSearchParams } from 'react-router-dom';
+
 
 export default function Verify() {
   const [batchId, setBatchId] = useState('');
+
+  useEffect(() => {
+    document.title = 'Verify — NectarTrace';
+  }, []);
 
   const verifyMutation = useMutation({
     mutationFn: (id) => batchesApi.verify(id).then((res) => res.data),
@@ -19,6 +26,16 @@ export default function Verify() {
     if (!batchId.trim()) return;
     verifyMutation.mutate(batchId.trim());
   };
+
+  const [searchParams] = useSearchParams();
+
+  // Auto-verify if batchId in URL
+  useEffect(() => {
+    const urlBatchId = searchParams.get('batchId');
+    if (urlBatchId) {
+      verifyMutation.mutate(urlBatchId);
+    }
+  }, [searchParams, verifyMutation]);
 
   const result = verifyMutation.data;
   const error = verifyMutation.error;
@@ -52,6 +69,15 @@ export default function Verify() {
                 placeholder="e.g., BAR-2026-001"
                 className="w-full px-4 py-3 bg-obsidian border border-dust/20 rounded-md text-ivory placeholder:text-dust/50 focus:border-beeswax focus:outline-none transition-colors font-mono"
                 required
+              />
+            </div>
+            <div className="mt-6 pt-6 border-t border-dust/10">
+              <p className="text-sm text-dust mb-3">Or scan a QR code:</p>
+              <QRScanner
+                onScan={(scannedBatchId) => {
+                  setBatchId(scannedBatchId);
+                  verifyMutation.mutate(scannedBatchId);
+                }}
               />
             </div>
             <Button

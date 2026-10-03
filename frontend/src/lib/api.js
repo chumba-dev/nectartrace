@@ -75,6 +75,7 @@ export const batchesApi = {
   myBatches: () => api.get('/batches/my'),
   updateStatus: (batchId, status) =>
     api.put(`/batches/${batchId}/status`, { status }),
+  qr: (batchId) => api.get(`/batches/${batchId}/qr`),
 };
 
 export const listingsApi = {
