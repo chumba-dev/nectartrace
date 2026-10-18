@@ -41,6 +41,11 @@ export default function Navbar() {
               Dashboard
             </NavLink>
           )}
+          {user?.role === 'ADMIN' && (
+            <NavLink to="/admin" className={navLinkClass}>
+              Admin
+            </NavLink>
+          )}
         </div>
 
         <div className="hidden md:flex items-center gap-3">
