@@ -21,8 +21,8 @@ router.get('/:batchId/verify', verifyBatch);
 // Protected routes
 router.use(authenticate);
 
-router.get('/my', getMyBatches);
-router.post('/', authorize('COOPERATIVE_STAFF', 'ADMIN'), createBatch);
-router.put('/:batchId/status', authorize('COOPERATIVE_STAFF', 'ADMIN'), updateStatus);
+router.get('/my', authenticate, getMyBatches);
+router.post('/', authenticate, authorize('COOPERATIVE_STAFF', 'ADMIN'), createBatch);
+router.put('/:batchId/status', authenticate, authorize('COOPERATIVE_STAFF', 'ADMIN'), updateStatus);
 
 module.exports = router;
