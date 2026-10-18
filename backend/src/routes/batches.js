@@ -14,9 +14,9 @@ const router = express.Router();
 
 // Public routes
 router.get('/', listBatches);
-router.get('/:batchId/qr', getBatchQR);
 router.get('/:batchId', getBatch);
 router.get('/:batchId/verify', verifyBatch);
+router.get('/:batchId/qr', getBatchQR);
 
 // Protected routes
 router.use(authenticate);

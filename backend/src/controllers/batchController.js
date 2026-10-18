@@ -29,7 +29,8 @@ async function createBatch(req, res, next) {
     if (!req.user.cooperativeId) {
       return res.status(403).json({
         success: false,
-        message: 'User is not associated with a cooperative',
+        message: 'Your account is not linked to a cooperative. Ask your admin to assign you.',
+        code: 'NO_COOPERATIVE',
       });
     }
 

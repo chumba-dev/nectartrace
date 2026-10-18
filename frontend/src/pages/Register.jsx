@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import { useAuth } from '../context/AuthContext';
+import { cooperativesApi } from '../lib/api';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -13,25 +15,56 @@ export default function Register() {
     phone: '',
     password: '',
     role: 'BUYER',
+    cooperativeId: '',
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    document.title = 'Register — NectarTrace';
-  }, []);
+  // Fetch cooperatives — only needed for COOPERATIVE_STAFF role
+  const { data: cooperatives = [], isLoading: loadingCoops } = useQuery({
+    queryKey: ['cooperatives'],
+    queryFn: () => cooperativesApi.list().then((res) => res.data.data),
+  });
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
+  const handleRoleChange = (role) => {
+    setForm({
+      ...form,
+      role,
+      // Reset cooperativeId when switching away from staff
+      cooperativeId: role === 'COOPERATIVE_STAFF' ? form.cooperativeId : '',
+    });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+
+    // Validate cooperative for staff
+    if (form.role === 'COOPERATIVE_STAFF' && !form.cooperativeId) {
+      setError('Please select a cooperative');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      await register(form);
+      const payload = {
+        name: form.name,
+        phone: form.phone,
+        password: form.password,
+        role: form.role,
+      };
+
+      // Only include cooperativeId for staff
+      if (form.role === 'COOPERATIVE_STAFF') {
+        payload.cooperativeId = parseInt(form.cooperativeId);
+      }
+
+      await register(payload);
       navigate('/');
     } catch (err) {
       setError(err.message || 'Registration failed');
@@ -109,7 +142,7 @@ export default function Register() {
                   <button
                     key={role}
                     type="button"
-                    onClick={() => setForm({ ...form, role })}
+                    onClick={() => handleRoleChange(role)}
                     className={`px-4 py-3 rounded-md text-sm font-medium transition-all ${
                       form.role === role
                         ? 'bg-beeswax text-obsidian border border-beeswax'
@@ -121,6 +154,39 @@ export default function Register() {
                 ))}
               </div>
             </div>
+
+            {/* Cooperative selector — only for staff */}
+            {form.role === 'COOPERATIVE_STAFF' && (
+              <div>
+                <label className={labelClass}>Cooperative</label>
+                <select
+                  name="cooperativeId"
+                  value={form.cooperativeId}
+                  onChange={handleChange}
+                  className={inputClass}
+                  disabled={loadingCoops}
+                  required
+                >
+                  <option value="">
+                    {loadingCoops
+                      ? 'Loading cooperatives...'
+                      : cooperatives.length === 0
+                        ? 'No cooperatives available'
+                        : 'Select a cooperative'}
+                  </option>
+                  {cooperatives.map((coop) => (
+                    <option key={coop.id} value={coop.id}>
+                      {coop.name} — {coop.village}
+                    </option>
+                  ))}
+                </select>
+                {cooperatives.length === 0 && !loadingCoops && (
+                  <p className="text-xs text-dust mt-1.5">
+                    No cooperatives registered yet. Contact an admin.
+                  </p>
+                )}
+              </div>
+            )}
 
             <Button
               type="submit"

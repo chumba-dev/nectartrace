@@ -3,6 +3,7 @@ const cors = require('cors');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const prisma = require('./config/db');
 const ussdRoutes = require('./routes/ussd');
+const adminRoutes = require('./routes/admin');
 
 // Route imports — declared ONCE
 const authRoutes = require('./routes/auth');
@@ -85,6 +86,7 @@ app.use('/api/listings', listingRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/prices', priceRoutes);
 app.use('/api/ussd', ussdRoutes);
+app.use('/api/admin', adminRoutes);
 // ============================================
 // ERROR HANDLING
 // ============================================

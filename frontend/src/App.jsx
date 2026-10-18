@@ -11,6 +11,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import ListingDetail from './pages/ListingDetail';
 import Orders from './pages/Orders';
 import NotFound from './pages/NotFound';
+import Admin from './pages/Admin';
 
 function App() {
   return (
@@ -38,6 +39,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <Orders />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute allowedRoles={['ADMIN']}>
+                <Admin />
               </ProtectedRoute>
             }
           />

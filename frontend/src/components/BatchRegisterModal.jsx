@@ -30,9 +30,11 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
       onClose();
     },
     onError: (err) => {
-      const message = err.message || 'Failed to register batch';
-      setError(message);
-      toast.error(message);
+      if (err.message?.includes('not linked to a cooperative')) {
+        setError('Your account needs to be linked to a cooperative. Contact your admin.');
+      } else {
+        setError(err.message || 'Failed to register batch');
+      }
     },
   });
 

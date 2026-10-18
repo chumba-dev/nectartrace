@@ -91,6 +91,14 @@ export default function Dashboard() {
         </Button>
       </div>
 
+      {!user.cooperativeId && (
+        <Card className="p-6 border-beeswax/30 bg-beeswax/5">
+          <p className="text-beeswax text-sm">
+            Your account isn't linked to a cooperative. Contact your admin to be assigned.
+          </p>
+        </Card>
+      )}
+
       {/* Stats */}
       <div className="grid md:grid-cols-3 gap-6 mb-16">
         <Card className="p-6">

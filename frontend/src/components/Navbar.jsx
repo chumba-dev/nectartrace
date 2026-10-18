@@ -113,6 +113,11 @@ export default function Navbar() {
                 Dashboard
               </NavLink>
             )}
+            {user?.role === 'ADMIN' && (
+              <NavLink to="/admin" className={navLinkClass} onClick={() => setOpen(false)}>
+                Admin
+              </NavLink>
+            )}
             {isAuthenticated && (
               <NavLink to="/orders" className={navLinkClass} onClick={() => setOpen(false)}>
                 Orders
