@@ -81,7 +81,7 @@ export default function Marketplace() {
                 <ListingImage
                   src={listing.imageUrl}
                   alt={`${listing.cooperative.name} honey from ${listing.batch.village}`}
-                  className="aspect-[4/3] w-full object-cover"
+                  className="aspect-[4/3] w-full bg-ivory/[0.03] p-4 object-contain sm:p-6"
                 />
 
                 <div className="flex flex-1 flex-col p-6">

@@ -359,7 +359,7 @@ export default function ListingCreateModal({ isOpen, onClose, cooperativeId }) {
                 <img
                   src={imageDataUrl}
                   alt="Listing cover preview"
-                  className="h-full w-full object-cover"
+                  className="h-full w-full bg-ivory/[0.03] p-4 object-contain sm:p-6"
                 />
                 <button
                   type="button"

@@ -1,5 +1,20 @@
 const prisma = require('../config/db');
 
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function rejectSelfManagement(req, res, userId, action) {
+  if (userId !== req.user.id) return false;
+
+  res.status(403).json({
+    success: false,
+    message: `Administrators cannot ${action} their own account`,
+  });
+  return true;
+}
+
 // GET /api/admin/users
 async function listUsers(req, res, next) {
   try {
@@ -28,18 +43,34 @@ async function listUsers(req, res, next) {
 // PUT /api/admin/users/:id/cooperative
 async function assignCooperative(req, res, next) {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parsePositiveInteger(req.params.id);
     const { cooperativeId } = req.body;
+    const parsedCooperativeId = parsePositiveInteger(cooperativeId);
 
-    if (!cooperativeId) {
+    if (!userId || !parsedCooperativeId) {
       return res.status(400).json({
         success: false,
-        message: 'cooperativeId required',
+        message: 'User and cooperative IDs must be positive integers',
+      });
+    }
+    if (rejectSelfManagement(req, res, userId, 'assign a cooperative to')) return;
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true },
+    });
+    if (!targetUser) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (targetUser.role !== 'COOPERATIVE_STAFF') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only cooperative staff accounts can be assigned to a cooperative',
       });
     }
 
     const coop = await prisma.cooperative.findUnique({
-      where: { id: parseInt(cooperativeId) },
+      where: { id: parsedCooperativeId },
     });
     if (!coop) {
       return res.status(404).json({
@@ -50,7 +81,7 @@ async function assignCooperative(req, res, next) {
 
     const user = await prisma.user.update({
       where: { id: userId },
-      data: { cooperativeId: parseInt(cooperativeId) },
+      data: { cooperativeId: parsedCooperativeId },
       select: {
         id: true,
         name: true,
@@ -70,8 +101,13 @@ async function assignCooperative(req, res, next) {
 // PUT /api/admin/users/:id/role
 async function changeUserRole(req, res, next) {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parsePositiveInteger(req.params.id);
     const { role } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'User ID must be a positive integer' });
+    }
+    if (rejectSelfManagement(req, res, userId, 'change the role of')) return;
 
     const allowed = ['FARMER', 'COOPERATIVE_STAFF', 'BUYER', 'ADMIN'];
     if (!allowed.includes(role)) {
@@ -83,8 +119,11 @@ async function changeUserRole(req, res, next) {
 
     const user = await prisma.user.update({
       where: { id: userId },
-      data: { role },
-      select: { id: true, name: true, role: true },
+      data: {
+        role,
+        cooperativeId: null,
+      },
+      select: { id: true, name: true, role: true, cooperativeId: true },
     });
 
     res.json({ success: true, data: user });
@@ -96,8 +135,16 @@ async function changeUserRole(req, res, next) {
 // PUT /api/admin/users/:id/active
 async function toggleUserActive(req, res, next) {
   try {
-    const userId = parseInt(req.params.id);
+    const userId = parsePositiveInteger(req.params.id);
     const { isActive } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: 'User ID must be a positive integer' });
+    }
+    if (rejectSelfManagement(req, res, userId, 'change the active status of')) return;
+    if (typeof isActive !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'isActive must be a boolean' });
+    }
 
     const user = await prisma.user.update({
       where: { id: userId },

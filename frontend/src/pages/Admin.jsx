@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import api from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
@@ -28,19 +29,32 @@ const roleVariant = {
 
 export default function Admin() {
   const queryClient = useQueryClient();
+  const { user: signedInAdmin } = useAuth();
   const [showCreateCoop, setShowCreateCoop] = useState(false);
 
-  const { data: users, isLoading: loadingUsers } = useQuery({
+  useEffect(() => {
+    document.title = 'Admin — NectarTrace';
+  }, []);
+
+  const {
+    data: users = [],
+    isLoading: loadingUsers,
+    error: usersError,
+  } = useQuery({
     queryKey: ['admin-users'],
     queryFn: () => adminApi.listUsers().then((res) => res.data.data),
   });
 
-  const { data: stats } = useQuery({
+  const { data: stats, error: statsError } = useQuery({
     queryKey: ['admin-stats'],
     queryFn: () => adminApi.stats().then((res) => res.data.data),
   });
 
-  const { data: cooperatives } = useQuery({
+  const {
+    data: cooperatives = [],
+    isLoading: loadingCooperatives,
+    error: cooperativesError,
+  } = useQuery({
     queryKey: ['cooperatives'],
     queryFn: () => api.get('/cooperatives').then((res) => res.data.data),
   });
@@ -64,6 +78,74 @@ export default function Admin() {
     onError: (err) => toast.error(err.message),
   });
 
+  const cooperativeIds = new Set(cooperatives.map((coop) => coop.id));
+  const cooperativeStaff = users.filter(
+    (account) => account.role === 'COOPERATIVE_STAFF'
+  );
+  const unassignedStaff = cooperativeStaff.filter(
+    (account) =>
+      !account.cooperativeId || !cooperativeIds.has(account.cooperativeId)
+  );
+  const administrators = users.filter((account) => account.role === 'ADMIN');
+  const otherAccounts = users.filter(
+    (account) =>
+      account.role !== 'ADMIN' && account.role !== 'COOPERATIVE_STAFF'
+  );
+
+  const assignCooperative = (account, cooperativeId) => {
+    const parsedCooperativeId = Number(cooperativeId);
+    if (!Number.isInteger(parsedCooperativeId) || parsedCooperativeId <= 0)
+      return;
+    if (parsedCooperativeId === account.cooperativeId) return;
+
+    assignMutation.mutate({
+      userId: account.id,
+      cooperativeId: parsedCooperativeId,
+    });
+  };
+
+  const cooperativeSelect = (
+    account,
+    placeholder = 'Assign cooperative...'
+  ) => (
+    <select
+      value={account.cooperativeId || ''}
+      onChange={(event) => assignCooperative(account, event.target.value)}
+      disabled={assignMutation.isPending || cooperatives.length === 0}
+      aria-label={`Assign ${account.name} to a cooperative`}
+      className="w-full rounded-md border border-dust/20 bg-obsidian px-3 py-2 text-sm text-ivory focus:border-beeswax focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+    >
+      <option value="">{placeholder}</option>
+      {cooperatives.map((coop) => (
+        <option key={coop.id} value={coop.id}>
+          {coop.name}
+        </option>
+      ))}
+    </select>
+  );
+
+  const roleSelect = (account) => (
+    <select
+      value={account.role}
+      onChange={(event) =>
+        roleMutation.mutate({
+          userId: account.id,
+          role: event.target.value,
+        })
+      }
+      disabled={roleMutation.isPending}
+      aria-label={`Change ${account.name}'s role`}
+      className="w-full rounded-md border border-dust/20 bg-obsidian px-3 py-2 text-sm text-ivory focus:border-beeswax focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+    >
+      <option value="BUYER">Buyer</option>
+      <option value="FARMER">Farmer</option>
+      <option value="COOPERATIVE_STAFF">Cooperative staff</option>
+      <option value="ADMIN">Administrator</option>
+    </select>
+  );
+
+  const queryError = usersError || cooperativesError || statsError;
+
   return (
     <div className="container-content py-20">
       {/* Header */}
@@ -78,6 +160,14 @@ export default function Admin() {
           Manage users, cooperatives, and monitor platform activity.
         </p>
       </div>
+
+      {queryError && (
+        <Card className="mb-8 border-red-500/30 bg-red-500/5 p-6">
+          <p className="text-sm text-red-300">
+            Failed to load part of the admin dashboard: {queryError.message}
+          </p>
+        </Card>
+      )}
 
       {/* Stats */}
       {stats && (
@@ -99,132 +189,237 @@ export default function Admin() {
         </div>
       )}
 
-      {/* Cooperatives section */}
+      {/* Cooperative teams */}
       <div className="mb-12">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-          <h2 className="font-display text-2xl text-ivory">Cooperatives</h2>
+          <div>
+            <h2 className="font-display text-2xl text-ivory">
+              Cooperative teams
+            </h2>
+            <p className="mt-2 text-sm text-dust">
+              Staff are grouped under the cooperative they represent.
+            </p>
+          </div>
           <Button onClick={() => setShowCreateCoop(true)}>
             + New cooperative
           </Button>
         </div>
 
-        {cooperatives && cooperatives.length === 0 && (
+        {(loadingUsers || loadingCooperatives) && (
+          <div className="grid gap-4 md:grid-cols-2">
+            {[1, 2].map((item) => (
+              <Card key={item} className="space-y-4 p-6">
+                <Skeleton variant="title" className="w-2/3" />
+                <Skeleton className="w-full" />
+                <Skeleton className="w-4/5" />
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {!loadingCooperatives && cooperatives.length === 0 && (
           <Card className="p-6">
             <p className="text-dust text-sm">
-              No cooperatives yet. Click "New cooperative" to create the first one.
+              No cooperatives yet. Click "New cooperative" to create the first
+              one.
             </p>
           </Card>
         )}
 
-        {cooperatives && cooperatives.length > 0 && (
-          <div className="grid md:grid-cols-2 gap-4">
+        {!loadingUsers && !loadingCooperatives && cooperatives.length > 0 && (
+          <div className="grid gap-5 xl:grid-cols-2">
             {cooperatives.map((coop) => (
-              <Card key={coop.id} className="p-5">
-                <div className="flex items-start justify-between mb-3">
-                  <h3 className="font-display text-lg text-ivory">
-                    {coop.name}
-                  </h3>
-                  <Badge variant="verified">Registered</Badge>
+              <Card key={coop.id} className="overflow-hidden">
+                <div className="p-6">
+                  <div className="mb-3 flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="font-display text-xl text-ivory">
+                        {coop.name}
+                      </h3>
+                      <p className="mt-1 text-sm text-dust">
+                        {coop.village}, {coop.county}
+                      </p>
+                    </div>
+                    <Badge variant="verified">Registered</Badge>
+                  </div>
+                  <MonoText className="block truncate text-xs">
+                    {coop.walletAddress}
+                  </MonoText>
                 </div>
-                <p className="text-sm text-dust mb-3">
-                  {coop.village}, {coop.county}
-                </p>
-                <MonoText className="block text-xs truncate">
-                  {coop.walletAddress}
-                </MonoText>
+
+                <div className="border-t border-dust/10 bg-obsidian/35">
+                  <div className="flex items-center justify-between px-6 py-4">
+                    <p className="font-mono text-xs uppercase tracking-widest text-dust">
+                      Cooperative staff
+                    </p>
+                    <span className="text-xs text-beeswax">
+                      {
+                        cooperativeStaff.filter(
+                          (account) => account.cooperativeId === coop.id
+                        ).length
+                      }{' '}
+                      assigned
+                    </span>
+                  </div>
+
+                  {cooperativeStaff.filter(
+                    (account) => account.cooperativeId === coop.id
+                  ).length === 0 ? (
+                    <p className="border-t border-dust/10 px-6 py-5 text-sm text-dust">
+                      No staff assigned to this cooperative yet.
+                    </p>
+                  ) : (
+                    cooperativeStaff
+                      .filter((account) => account.cooperativeId === coop.id)
+                      .map((account) => (
+                        <div
+                          key={account.id}
+                          className="flex flex-col gap-4 border-t border-dust/10 px-6 py-4 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium text-ivory">
+                                {account.name}
+                              </p>
+                              {!account.isActive && (
+                                <Badge variant="sold">Inactive</Badge>
+                              )}
+                            </div>
+                            <MonoText className="mt-1 block truncate text-xs">
+                              {account.phone}
+                            </MonoText>
+                          </div>
+                          {cooperativeSelect(account, 'Move to cooperative...')}
+                        </div>
+                      ))
+                  )}
+                </div>
               </Card>
             ))}
           </div>
         )}
       </div>
 
-      {/* Users section */}
-      <div>
-        <h2 className="font-display text-2xl text-ivory mb-6">
-          Users ({users?.length || 0})
-        </h2>
+      {/* Staff awaiting assignment */}
+      <div className="mb-12">
+        <div className="mb-6">
+          <h2 className="font-display text-2xl text-ivory">
+            Staff awaiting assignment ({unassignedStaff.length})
+          </h2>
+          <p className="mt-2 text-sm text-dust">
+            These users already registered as cooperative staff. Approve them by
+            selecting their cooperative; no role change is required.
+          </p>
+        </div>
 
-        {loadingUsers && (
+        {!loadingUsers && unassignedStaff.length === 0 ? (
+          <Card className="p-6">
+            <p className="text-sm text-dust">
+              No cooperative staff accounts are waiting for assignment.
+            </p>
+          </Card>
+        ) : (
           <div className="space-y-3">
-            {[1, 2, 3].map((i) => (
-              <Card key={i} className="p-6">
-                <Skeleton variant="title" className="w-1/3" />
+            {unassignedStaff.map((account) => (
+              <Card key={account.id} className="p-6">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h3 className="font-display text-lg text-ivory">
+                        {account.name}
+                      </h3>
+                      <Badge variant="pending">Cooperative staff</Badge>
+                    </div>
+                    <MonoText className="mt-2 block truncate text-sm">
+                      {account.phone}
+                    </MonoText>
+                  </div>
+                  {cooperativeSelect(account)}
+                </div>
               </Card>
             ))}
           </div>
         )}
+      </div>
 
-        {users && (
-          <div className="space-y-3">
-            {users.map((user) => (
-              <Card key={user.id} className="p-6">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-3 mb-2">
+      {/* Administrators */}
+      <div className="mb-12">
+        <h2 className="mb-6 font-display text-2xl text-ivory">
+          Administrators ({administrators.length})
+        </h2>
+        <div className="space-y-3">
+          {administrators.map((account) => {
+            const isCurrentAdmin = account.id === signedInAdmin?.id;
+            return (
+              <Card key={account.id} className="p-6">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-3">
                       <h3 className="font-display text-lg text-ivory">
-                        {user.name}
+                        {account.name}
                       </h3>
-                      <Badge variant={roleVariant[user.role] || 'default'}>
-                        {user.role}
+                      <Badge variant="verified">
+                        {isCurrentAdmin
+                          ? 'You · Administrator'
+                          : 'Administrator'}
                       </Badge>
-                      {!user.isActive && (
+                    </div>
+                    <MonoText className="mt-2 block truncate text-sm">
+                      {account.phone}
+                    </MonoText>
+                  </div>
+                  {isCurrentAdmin ? (
+                    <p className="rounded-md border border-sage/30 bg-sage/10 px-3 py-2 text-xs text-sage">
+                      Your administrator role is protected
+                    </p>
+                  ) : (
+                    roleSelect(account)
+                  )}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Other accounts */}
+      <div>
+        <h2 className="mb-2 font-display text-2xl text-ivory">
+          Buyer and farmer accounts ({otherAccounts.length})
+        </h2>
+        <p className="mb-6 text-sm text-dust">
+          Change an account to cooperative staff only when it should enter the
+          assignment queue above.
+        </p>
+
+        {otherAccounts.length === 0 ? (
+          <Card className="p-6">
+            <p className="text-sm text-dust">
+              No buyer or farmer accounts yet.
+            </p>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {otherAccounts.map((account) => (
+              <Card key={account.id} className="p-6">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h3 className="font-display text-lg text-ivory">
+                        {account.name}
+                      </h3>
+                      <Badge variant={roleVariant[account.role] || 'default'}>
+                        {account.role}
+                      </Badge>
+                      {!account.isActive && (
                         <Badge variant="sold">Inactive</Badge>
                       )}
                     </div>
-                    <MonoText className="block text-sm">{user.phone}</MonoText>
-                    <p className="text-sm text-dust mt-2">
-                      Cooperative:{' '}
-                      {user.cooperative ? (
-                        <span className="text-ivory">
-                          {user.cooperative.name}
-                        </span>
-                      ) : (
-                        <span className="text-beeswax">Not assigned</span>
-                      )}
-                    </p>
+                    <MonoText className="mt-2 block truncate text-sm">
+                      {account.phone}
+                    </MonoText>
                   </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    {/* Assign cooperative */}
-                    {user.role !== 'ADMIN' && (
-                      <select
-                        value={user.cooperativeId || ''}
-                        onChange={(e) => {
-                          if (e.target.value) {
-                            assignMutation.mutate({
-                              userId: user.id,
-                              cooperativeId: parseInt(e.target.value),
-                            });
-                          }
-                        }}
-                        className="px-3 py-2 bg-obsidian border border-dust/20 rounded-md text-ivory text-sm focus:border-beeswax focus:outline-none"
-                      >
-                        <option value="">Assign cooperative...</option>
-                        {cooperatives?.map((coop) => (
-                          <option key={coop.id} value={coop.id}>
-                            {coop.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-
-                    {/* Change role */}
-                    <select
-                      value={user.role}
-                      onChange={(e) =>
-                        roleMutation.mutate({
-                          userId: user.id,
-                          role: e.target.value,
-                        })
-                      }
-                      className="px-3 py-2 bg-obsidian border border-dust/20 rounded-md text-ivory text-sm focus:border-beeswax focus:outline-none"
-                    >
-                      <option value="BUYER">Buyer</option>
-                      <option value="FARMER">Farmer</option>
-                      <option value="COOPERATIVE_STAFF">Coop Staff</option>
-                      <option value="ADMIN">Admin</option>
-                    </select>
-                  </div>
+                  {roleSelect(account)}
                 </div>
               </Card>
             ))}

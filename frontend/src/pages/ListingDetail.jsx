@@ -133,7 +133,7 @@ export default function ListingDetail() {
             src={listing.imageUrl}
             alt={`${listing.cooperative.name} honey from ${listing.batch.village}`}
             loading="eager"
-            className="aspect-[4/3] w-full rounded-xl border border-dust/10 object-cover sm:aspect-[16/9]"
+            className="aspect-[4/3] w-full rounded-xl border border-dust/10 bg-ivory/[0.03] p-5 object-contain sm:aspect-[16/9] sm:p-8"
           />
 
           <div>
