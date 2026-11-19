@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -10,12 +10,15 @@ import VerifiedBadge from '../components/ui/VerifiedBadge';
 import MonoText from '../components/ui/MonoText';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
+import ListingImage from '../components/ListingImage';
 
 export default function ListingDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const { user, isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const queryClient = useQueryClient();
+  const redirectTimerRef = useRef(null);
+  const canOrder = user?.role === 'BUYER';
 
   const [quantity, setQuantity] = useState('');
   const [notes, setNotes] = useState('');
@@ -24,9 +27,17 @@ export default function ListingDetail() {
 
   useEffect(() => {
     document.title = 'Listing — NectarTrace';
+
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
   }, []);
 
-  const { data: listing, isLoading, error } = useQuery({
+  const {
+    data: listing,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['listing', id],
     queryFn: () => listingsApi.get(id).then((res) => res.data.data),
   });
@@ -35,11 +46,13 @@ export default function ListingDetail() {
     mutationFn: (data) => ordersApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['listings'] });
+      queryClient.invalidateQueries({ queryKey: ['listing', id] });
       setOrderSuccess(true);
       setQuantity('');
       setNotes('');
       toast.success('Order placed');
-      setTimeout(() => {
+      redirectTimerRef.current = setTimeout(() => {
         navigate('/orders');
       }, 2000);
     },
@@ -55,12 +68,17 @@ export default function ListingDetail() {
     setOrderError('');
 
     if (!isAuthenticated) {
-      navigate('/login');
+      navigate('/login', { state: { from: { pathname: `/listings/${id}` } } });
+      return;
+    }
+
+    if (!canOrder) {
+      setOrderError('Only buyer accounts can place marketplace orders');
       return;
     }
 
     const qty = parseFloat(quantity);
-    if (qty <= 0 || qty > listing.quantityKg) {
+    if (!Number.isFinite(qty) || qty <= 0 || qty > listing.quantityKg) {
       setOrderError(`Quantity must be between 0 and ${listing.quantityKg}kg`);
       return;
     }
@@ -111,6 +129,13 @@ export default function ListingDetail() {
       <div className="grid lg:grid-cols-3 gap-8">
         {/* Main details — 2 cols */}
         <div className="lg:col-span-2 space-y-6">
+          <ListingImage
+            src={listing.imageUrl}
+            alt={`${listing.cooperative.name} honey from ${listing.batch.village}`}
+            loading="eager"
+            className="aspect-[4/3] w-full rounded-xl border border-dust/10 object-cover sm:aspect-[16/9]"
+          />
+
           <div>
             <div className="flex flex-wrap items-center gap-3 mb-4">
               <VerifiedBadge />
@@ -160,14 +185,18 @@ export default function ListingDetail() {
               <div className="flex justify-between">
                 <dt className="text-sm text-dust">Verified on-chain</dt>
                 <dd>
-                  <a
-                    href={`https://amoy.polygonscan.com/address/${listing.batch.blockchainTxHash ? '0xD0F9616320a4ab76414A8B081005Cb9260368910' : '#'}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-beeswax hover:underline text-sm"
-                  >
-                    View on Polygonscan →
-                  </a>
+                  {listing.batch.blockchainTxHash ? (
+                    <a
+                      href={`https://amoy.polygonscan.com/tx/${listing.batch.blockchainTxHash}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-beeswax hover:underline text-sm"
+                    >
+                      View transaction on Polygonscan →
+                    </a>
+                  ) : (
+                    <span className="text-sm text-dust">Unavailable</span>
+                  )}
                 </dd>
               </div>
             </dl>
@@ -185,7 +214,11 @@ export default function ListingDetail() {
               <p className="text-xs text-dust font-mono mt-1">per kg</p>
             </div>
 
-            {orderSuccess ? (
+            {isAuthenticated && !canOrder ? (
+              <div className="rounded-md border border-dust/20 bg-obsidian p-4 text-sm text-dust">
+                Marketplace orders can only be placed from a buyer account.
+              </div>
+            ) : orderSuccess ? (
               <div className="bg-sage/10 border border-sage/30 text-sage rounded-md p-4 text-sm text-center">
                 ✓ Order placed successfully. Redirecting...
               </div>

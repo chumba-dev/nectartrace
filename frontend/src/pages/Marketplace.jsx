@@ -8,6 +8,7 @@ import MonoText from '../components/ui/MonoText';
 import Skeleton from '../components/ui/Skeleton';
 import EmptyState from '../components/ui/EmptyState';
 import Button from '../components/ui/Button';
+import ListingImage from '../components/ListingImage';
 
 export default function Marketplace() {
   useEffect(() => {
@@ -37,11 +38,14 @@ export default function Marketplace() {
       {isLoading && (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[1, 2, 3].map((i) => (
-            <Card key={i} className="p-6 space-y-4">
-              <Skeleton variant="title" className="w-2/3" />
-              <Skeleton className="w-full" />
-              <Skeleton className="w-5/6" />
-              <Skeleton variant="title" className="w-1/3" />
+            <Card key={i}>
+              <Skeleton className="aspect-[4/3] w-full rounded-none" />
+              <div className="space-y-4 p-6">
+                <Skeleton variant="title" className="w-2/3" />
+                <Skeleton className="w-full" />
+                <Skeleton className="w-5/6" />
+                <Skeleton variant="title" className="w-1/3" />
+              </div>
             </Card>
           ))}
         </div>
@@ -68,36 +72,48 @@ export default function Marketplace() {
       {data && data.length > 0 && (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {data.map((listing) => (
-            <Link key={listing.id} to={`/listings/${listing.id}`}>
-              <Card hover className="p-6 h-full flex flex-col">
-                <div className="flex items-start justify-between mb-4">
-                  <VerifiedBadge />
-                  <MonoText className="text-xs">
-                    {listing.batch.batchId}
-                  </MonoText>
-                </div>
+            <Link
+              key={listing.id}
+              to={`/listings/${listing.id}`}
+              className="block h-full"
+            >
+              <Card hover className="flex h-full flex-col">
+                <ListingImage
+                  src={listing.imageUrl}
+                  alt={`${listing.cooperative.name} honey from ${listing.batch.village}`}
+                  className="aspect-[4/3] w-full object-cover"
+                />
 
-                <h3 className="font-display text-xl text-ivory mb-2">
-                  {listing.cooperative.name}
-                </h3>
-                <p className="text-dust text-sm mb-4">
-                  {listing.batch.village} · Harvested{' '}
-                  {new Date(listing.batch.harvestDate).toLocaleDateString(
-                    'en-KE',
-                    { month: 'short', year: 'numeric' }
-                  )}
-                </p>
-
-                <div className="mt-auto pt-4 border-t border-dust/10 flex items-end justify-between">
-                  <div>
-                    <p className="font-display text-2xl text-beeswax">
-                      KES {listing.pricePerKg.toLocaleString()}
-                    </p>
-                    <p className="text-xs text-dust font-mono">per kg</p>
+                <div className="flex flex-1 flex-col p-6">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <VerifiedBadge />
+                    <MonoText className="text-xs">
+                      {listing.batch.batchId}
+                    </MonoText>
                   </div>
-                  <p className="text-sm text-dust">
-                    {listing.quantityKg}kg available
+
+                  <h3 className="mb-2 font-display text-xl text-ivory">
+                    {listing.cooperative.name}
+                  </h3>
+                  <p className="mb-4 text-sm text-dust">
+                    {listing.batch.village} · Harvested{' '}
+                    {new Date(listing.batch.harvestDate).toLocaleDateString(
+                      'en-KE',
+                      { month: 'short', year: 'numeric' }
+                    )}
                   </p>
+
+                  <div className="mt-auto flex items-end justify-between gap-4 border-t border-dust/10 pt-4">
+                    <div>
+                      <p className="font-display text-2xl text-beeswax">
+                        KES {listing.pricePerKg.toLocaleString()}
+                      </p>
+                      <p className="font-mono text-xs text-dust">per kg</p>
+                    </div>
+                    <p className="text-right text-sm text-dust">
+                      {listing.quantityKg}kg available
+                    </p>
+                  </div>
                 </div>
               </Card>
             </Link>

@@ -119,12 +119,12 @@ export default function Landing() {
                 Real trust for buyers.
               </h2>
               <p className="text-dust text-lg mb-8 text-pretty">
-                Join 8,000+ Baringo beekeepers selling directly to urban buyers.
-                Every transaction is transparent, every batch is verified.
+                Join Baringo beekeepers selling through trusted cooperatives to
+                urban buyers. Every batch is traceable and verified.
               </p>
               <div className="flex flex-wrap gap-4">
                 <Button size="lg" to="/register">
-                  Register your cooperative
+                  Create an account
                 </Button>
                 <Button size="lg" variant="ghost" to="/marketplace">
                   Browse marketplace →

@@ -148,75 +148,20 @@ async function handleListHoney(inputs, phoneNumber) {
     );
   }
 
-  // Level 1: user chose option 4
-  if (inputs.length === 1) {
-    return menu.askListingQuantity();
+  if (
+    !user.isActive
+    || user.role !== 'COOPERATIVE_STAFF'
+    || !user.cooperativeId
+    || !user.cooperative
+  ) {
+    return menu.errorMessage(
+      'Only active cooperative staff linked to a cooperative can list honey.'
+    );
   }
 
-  // Level 2: user entered quantity
-  if (inputs.length === 2) {
-    const quantityKg = parseFloat(inputs[1]);
-
-    if (isNaN(quantityKg) || quantityKg <= 0 || quantityKg > 10000) {
-      return menu.errorMessage('Invalid quantity. Please enter a number.');
-    }
-
-    return menu.askListingPrice(quantityKg);
-  }
-
-  // Level 3: user entered price
-  if (inputs.length === 3) {
-    const quantityKg = parseFloat(inputs[1]);
-    const pricePerKg = parseFloat(inputs[2]);
-
-    if (isNaN(pricePerKg) || pricePerKg <= 0) {
-      return menu.errorMessage('Invalid price. Please enter a number.');
-    }
-
-    // Determine batch to attach listing to
-    // For USSD, we use a "pending" batch that cooperative verifies later
-    // Simplest approach: attach to most recent available batch
-
-    if (!user.cooperativeId) {
-      return menu.errorMessage(
-        'You are not part of a cooperative. Cannot list honey yet.'
-      );
-    }
-
-    const batch = await prisma.honeyBatch.findFirst({
-      where: {
-        cooperativeId: user.cooperativeId,
-        status: 'AVAILABLE',
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (!batch) {
-      return menu.errorMessage(
-        'No verified batch available. Contact your cooperative.'
-      );
-    }
-
-    // Create listing
-    await prisma.listing.create({
-      data: {
-        batchId: batch.id,
-        cooperativeId: user.cooperativeId,
-        quantityKg,
-        pricePerKg,
-        description: `Listed via USSD by ${user.name}`,
-      },
-    });
-
-    // Send SMS
-    smsService
-      .sendListingConfirmation(phoneNumber, quantityKg, pricePerKg)
-      .catch((err) => logger.error('SMS failed', { error: err.message }));
-
-    return menu.listingConfirmation(quantityKg, pricePerKg);
-  }
-
-  return menu.errorMessage('Invalid input');
+  return menu.errorMessage(
+    'Use the NectarTrace web dashboard to add the required honey photo and publish a listing.'
+  );
 }
 
 module.exports = {

@@ -1,10 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import { useAuth } from '../context/AuthContext';
-import { cooperativesApi } from '../lib/api';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -15,39 +13,25 @@ export default function Register() {
     phone: '',
     password: '',
     role: 'BUYER',
-    cooperativeId: '',
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Fetch cooperatives — only needed for COOPERATIVE_STAFF role
-  const { data: cooperatives = [], isLoading: loadingCoops } = useQuery({
-    queryKey: ['cooperatives'],
-    queryFn: () => cooperativesApi.list().then((res) => res.data.data),
-  });
+  useEffect(() => {
+    document.title = 'Register — NectarTrace';
+  }, []);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
   const handleRoleChange = (role) => {
-    setForm({
-      ...form,
-      role,
-      // Reset cooperativeId when switching away from staff
-      cooperativeId: role === 'COOPERATIVE_STAFF' ? form.cooperativeId : '',
-    });
+    setForm({ ...form, role });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-
-    // Validate cooperative for staff
-    if (form.role === 'COOPERATIVE_STAFF' && !form.cooperativeId) {
-      setError('Please select a cooperative');
-      return;
-    }
 
     setLoading(true);
 
@@ -58,11 +42,6 @@ export default function Register() {
         password: form.password,
         role: form.role,
       };
-
-      // Only include cooperativeId for staff
-      if (form.role === 'COOPERATIVE_STAFF') {
-        payload.cooperativeId = parseInt(form.cooperativeId);
-      }
 
       await register(payload);
       navigate('/');
@@ -149,42 +128,21 @@ export default function Register() {
                         : 'bg-obsidian text-dust border border-dust/20 hover:border-dust/40'
                     }`}
                   >
-                    {role === 'BUYER' ? 'Buyer' : 'Cooperative'}
+                    {role === 'BUYER' ? 'Buyer' : 'Cooperative staff'}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Cooperative selector — only for staff */}
             {form.role === 'COOPERATIVE_STAFF' && (
-              <div>
-                <label className={labelClass}>Cooperative</label>
-                <select
-                  name="cooperativeId"
-                  value={form.cooperativeId}
-                  onChange={handleChange}
-                  className={inputClass}
-                  disabled={loadingCoops}
-                  required
-                >
-                  <option value="">
-                    {loadingCoops
-                      ? 'Loading cooperatives...'
-                      : cooperatives.length === 0
-                        ? 'No cooperatives available'
-                        : 'Select a cooperative'}
-                  </option>
-                  {cooperatives.map((coop) => (
-                    <option key={coop.id} value={coop.id}>
-                      {coop.name} — {coop.village}
-                    </option>
-                  ))}
-                </select>
-                {cooperatives.length === 0 && !loadingCoops && (
-                  <p className="text-xs text-dust mt-1.5">
-                    No cooperatives registered yet. Contact an admin.
-                  </p>
-                )}
+              <div className="rounded-md border border-beeswax/30 bg-beeswax/5 p-4">
+                <p className="text-sm text-beeswax">
+                  Cooperative assignment is pending after registration.
+                </p>
+                <p className="mt-1.5 text-xs text-dust">
+                  An administrator must link your account to a cooperative
+                  before you can register batches or create listings.
+                </p>
               </div>
             )}
 

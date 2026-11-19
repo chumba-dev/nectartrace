@@ -5,6 +5,20 @@ import Modal from './ui/Modal';
 import Button from './ui/Button';
 import { batchesApi } from '../lib/api';
 
+const BATCH_ID_PATTERN = /^BAR-\d{4}-\d{3}$/;
+const MOISTURE_PATTERN = /^\d+(?:\.\d)?$/;
+
+function isValidDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const date = new Date(`${value}T00:00:00Z`);
+  return (
+    !Number.isNaN(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value &&
+    value <= new Date().toISOString().slice(0, 10)
+  );
+}
+
 export default function BatchRegisterModal({ isOpen, onClose }) {
   const queryClient = useQueryClient();
 
@@ -31,7 +45,9 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
     },
     onError: (err) => {
       if (err.message?.includes('not linked to a cooperative')) {
-        setError('Your account needs to be linked to a cooperative. Contact your admin.');
+        setError(
+          'Your account needs to be linked to a cooperative. Contact your admin.'
+        );
       } else {
         setError(err.message || 'Failed to register batch');
       }
@@ -58,20 +74,56 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
     e.preventDefault();
     setError('');
 
-    // Validation
-    const moisture = parseFloat(form.moisturePercent);
-    if (moisture < 0 || moisture > 100) {
-      setError('Moisture must be between 0 and 100%');
+    if (!BATCH_ID_PATTERN.test(form.batchId)) {
+      setError('Batch ID must match BAR-YYYY-NNN exactly');
+      return;
+    }
+
+    const village = form.village.trim();
+    if (!village) {
+      setError('Village is required');
+      return;
+    }
+
+    if (!isValidDate(form.harvestDate)) {
+      setError('Enter a valid harvest date that is not in the future');
+      return;
+    }
+
+    const moistureValue = form.moisturePercent.trim();
+    const moisture = Number(moistureValue);
+    if (
+      !MOISTURE_PATTERN.test(moistureValue) ||
+      !Number.isFinite(moisture) ||
+      moisture <= 0 ||
+      moisture >= 100
+    ) {
+      setError(
+        'Moisture must be greater than 0 and less than 100, with at most one decimal place'
+      );
+      return;
+    }
+
+    const weight = Number(form.weightKg);
+    if (!Number.isInteger(weight) || weight < 1) {
+      setError('Weight must be a whole number of kilograms, at least 1 kg');
+      return;
+    }
+
+    const priceValue = form.pricePerKg.trim();
+    const price = priceValue ? Number(priceValue) : null;
+    if (priceValue && (!Number.isFinite(price) || price <= 0)) {
+      setError('Price per kg must be greater than 0 when supplied');
       return;
     }
 
     mutation.mutate({
-      batchId: form.batchId.trim(),
-      village: form.village.trim(),
+      batchId: form.batchId,
+      village,
       harvestDate: form.harvestDate,
       moisturePercent: moisture,
-      weightKg: parseFloat(form.weightKg),
-      pricePerKg: form.pricePerKg ? parseFloat(form.pricePerKg) : null,
+      weightKg: weight,
+      pricePerKg: price,
     });
   };
 
@@ -86,11 +138,7 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
   const labelClass = 'block text-sm text-dust mb-2';
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={handleClose}
-      title="Register new batch"
-    >
+    <Modal isOpen={isOpen} onClose={handleClose} title="Register new batch">
       <form onSubmit={handleSubmit} className="space-y-5">
         {error && (
           <div className="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-md">
@@ -107,10 +155,15 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
             onChange={handleChange}
             placeholder="BAR-2026-002"
             className={`${inputClass} font-mono`}
+            pattern="BAR-[0-9]{4}-[0-9]{3}"
+            title="Use the exact format BAR-YYYY-NNN"
+            maxLength={12}
+            autoCapitalize="characters"
+            spellCheck="false"
             required
           />
           <p className="text-xs text-dust mt-1.5">
-            Must be unique. Format: BAR-YYYY-NNN
+            Required and unique. Exact format: BAR-YYYY-NNN.
           </p>
         </div>
 
@@ -134,12 +187,13 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
             name="harvestDate"
             value={form.harvestDate}
             onChange={handleChange}
+            max={new Date().toISOString().slice(0, 10)}
             className={inputClass}
             required
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label className={labelClass}>Moisture % *</label>
             <input
@@ -149,13 +203,13 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
               onChange={handleChange}
               placeholder="18.5"
               step="0.1"
-              min="0"
-              max="100"
+              min="0.1"
+              max="99.9"
               className={inputClass}
               required
             />
             <p className="text-xs text-dust mt-1.5">
-              Below 20% = pure
+              Greater than 0, less than 100; one decimal maximum.
             </p>
           </div>
 
@@ -167,11 +221,14 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
               value={form.weightKg}
               onChange={handleChange}
               placeholder="120"
-              step="0.1"
-              min="0"
+              step="1"
+              min="1"
               className={inputClass}
               required
             />
+            <p className="text-xs text-dust mt-1.5">
+              Whole kilograms only; minimum 1 kg.
+            </p>
           </div>
         </div>
 
@@ -183,12 +240,12 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
             value={form.pricePerKg}
             onChange={handleChange}
             placeholder="700"
-            step="1"
-            min="0"
+            step="0.01"
+            min="0.01"
             className={inputClass}
           />
           <p className="text-xs text-dust mt-1.5">
-            Optional. Can be set when listing.
+            Optional. If supplied, it must be greater than 0.
           </p>
         </div>
 
@@ -199,7 +256,7 @@ export default function BatchRegisterModal({ isOpen, onClose }) {
           <ul className="space-y-1 list-disc list-inside">
             <li>Batch is written to the blockchain (immutable)</li>
             <li>Saved to database with transaction hash</li>
-            <li>QR code will be generated for the batch</li>
+            <li>QR code becomes available to view and download</li>
           </ul>
         </div>
 

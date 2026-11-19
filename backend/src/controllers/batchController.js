@@ -4,6 +4,21 @@ const logger = require('../utils/logger');
 const QRCode = require('qrcode');
 const env = require('../config/env');
 
+const BATCH_ID_PATTERN = /^BAR-\d{4}-\d{3}$/;
+const MOISTURE_PATTERN = /^\d+(?:\.\d)?$/;
+
+function parseHarvestDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    return null;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  return value <= today ? date : null;
+}
+
 // POST /api/batches
 // Staff only — records batch in DB + blockchain
 async function createBatch(req, res, next) {
@@ -17,11 +32,56 @@ async function createBatch(req, res, next) {
       pricePerKg,
     } = req.body;
 
-    // Validate
-    if (!batchId || !village || !harvestDate || !moisturePercent || !weightKg) {
+    const normalizedBatchId = typeof batchId === 'string' ? batchId.trim() : '';
+    const normalizedVillage = typeof village === 'string' ? village.trim() : '';
+    const parsedHarvestDate = parseHarvestDate(harvestDate);
+    const moistureText = String(moisturePercent ?? '').trim();
+    const parsedMoisture = Number(moistureText);
+    const parsedWeight = Number(weightKg);
+    const hasPrice = pricePerKg !== undefined
+      && pricePerKg !== null
+      && String(pricePerKg).trim() !== '';
+    const parsedPrice = hasPrice ? Number(pricePerKg) : null;
+
+    if (!BATCH_ID_PATTERN.test(normalizedBatchId)) {
       return res.status(400).json({
         success: false,
-        message: 'batchId, village, harvestDate, moisturePercent, weightKg required',
+        message: 'batchId must match BAR-YYYY-NNN exactly',
+      });
+    }
+    if (!normalizedVillage || normalizedVillage.length > 120) {
+      return res.status(400).json({
+        success: false,
+        message: 'village is required and must not exceed 120 characters',
+      });
+    }
+    if (!parsedHarvestDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'harvestDate must be a valid date that is not in the future',
+      });
+    }
+    if (
+      !MOISTURE_PATTERN.test(moistureText)
+      || !Number.isFinite(parsedMoisture)
+      || parsedMoisture <= 0
+      || parsedMoisture >= 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'moisturePercent must be greater than 0 and less than 100 with at most one decimal place',
+      });
+    }
+    if (!Number.isInteger(parsedWeight) || parsedWeight < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'weightKg must be a whole number of kilograms and at least 1',
+      });
+    }
+    if (hasPrice && (!Number.isFinite(parsedPrice) || parsedPrice <= 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'pricePerKg must be greater than 0 when supplied',
       });
     }
 
@@ -48,7 +108,7 @@ async function createBatch(req, res, next) {
 
     // Check batch doesn't exist
     const existing = await prisma.honeyBatch.findUnique({
-      where: { batchId },
+      where: { batchId: normalizedBatchId },
     });
 
     if (existing) {
@@ -62,32 +122,31 @@ async function createBatch(req, res, next) {
     let blockchainResult;
     try {
       blockchainResult = await blockchain.recordBatchOnChain({
-        batchId,
-        village,
+        batchId: normalizedBatchId,
+        village: normalizedVillage,
         cooperativeName: cooperative.name,
-        moisturePercent: parseFloat(moisturePercent),
-        weightKg: parseFloat(weightKg),
+        moisturePercent: parsedMoisture,
+        weightKg: parsedWeight,
         harvestDate,
       });
     } catch (err) {
-      logger.error('Blockchain write failed', { error: err.message, batchId });
+      logger.error('Blockchain write failed', { error: err.message, batchId: normalizedBatchId });
       return res.status(502).json({
         success: false,
         message: 'Failed to record batch on blockchain',
-        error: err.message,
       });
     }
 
     // Save to database
     const batch = await prisma.honeyBatch.create({
       data: {
-        batchId,
+        batchId: normalizedBatchId,
         cooperativeId: cooperative.id,
-        village,
-        harvestDate: new Date(harvestDate),
-        moistureContent: parseFloat(moisturePercent),
-        weightKg: parseFloat(weightKg),
-        pricePerKg: pricePerKg ? parseFloat(pricePerKg) : null,
+        village: normalizedVillage,
+        harvestDate: parsedHarvestDate,
+        moistureContent: parsedMoisture,
+        weightKg: parsedWeight,
+        pricePerKg: parsedPrice,
         blockchainTxHash: blockchainResult.txHash,
         createdByUserId: req.user.id,
       },
@@ -95,7 +154,7 @@ async function createBatch(req, res, next) {
     });
 
     logger.info('Batch created', {
-      batchId,
+      batchId: normalizedBatchId,
       txHash: blockchainResult.txHash,
     });
 

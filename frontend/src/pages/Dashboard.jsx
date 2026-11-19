@@ -1,6 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { batchesApi, cooperativesApi, listingsApi } from '../lib/api';
+import { batchesApi, cooperativesApi } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -10,9 +10,10 @@ import Skeleton from '../components/ui/Skeleton';
 import EmptyState from '../components/ui/EmptyState';
 import Modal from '../components/ui/Modal';
 import BatchRegisterModal from '../components/BatchRegisterModal';
+import ListingCreateModal from '../components/ListingCreateModal';
 
 function QRCodeModal({ batchId, onClose }) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['qr', batchId],
     queryFn: () => batchesApi.qr(batchId).then((res) => res.data.data),
     enabled: !!batchId,
@@ -24,23 +25,31 @@ function QRCodeModal({ batchId, onClose }) {
     <Modal isOpen={!!batchId} onClose={onClose} title={`QR - ${batchId}`}>
       {isLoading ? (
         <Skeleton variant="card" className="aspect-square" />
-      ) : (
+      ) : error ? (
+        <div className="rounded-md border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+          Unable to load this QR code: {error.message}
+        </div>
+      ) : data ? (
         <div className="text-center">
           <img
             src={data.qrDataUrl}
             alt={`QR code for batch ${batchId}`}
             className="mx-auto rounded-lg"
           />
-          <p className="text-xs text-dust mt-4 font-mono break-all">
+          <p className="mt-4 break-all font-mono text-xs text-dust">
             {data.verifyUrl}
           </p>
           <a
             href={data.qrDataUrl}
             download={`${batchId}-qr.png`}
-            className="inline-block mt-4 text-beeswax hover:underline text-sm"
+            className="mt-4 inline-block text-sm text-beeswax hover:underline"
           >
             Download PNG
           </a>
+        </div>
+      ) : (
+        <div className="rounded-md border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+          The QR code response was empty. Please try again.
         </div>
       )}
     </Modal>
@@ -49,27 +58,39 @@ function QRCodeModal({ batchId, onClose }) {
 
 export default function Dashboard() {
   const { user } = useAuth();
-  const queryClient = useQueryClient();
   const [showNewBatch, setShowNewBatch] = useState(false);
+  const [showNewListing, setShowNewListing] = useState(false);
   const [qrBatchId, setQrBatchId] = useState(null);
+  const cooperativeId = user.cooperativeId ?? user.cooperative?.id;
+  const canManageInventory =
+    Boolean(cooperativeId) &&
+    ['COOPERATIVE_STAFF', 'ADMIN'].includes(user.role);
 
   useEffect(() => {
     document.title = 'Dashboard — NectarTrace';
   }, []);
 
   // Fetch stats
-  const { data: stats } = useQuery({
-    queryKey: ['coop-stats', user.cooperativeId],
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    error: statsError,
+  } = useQuery({
+    queryKey: ['coop-stats', cooperativeId],
     queryFn: () =>
-      cooperativesApi.stats(user.cooperativeId).then((res) => res.data.data),
-    enabled: !!user.cooperativeId,
+      cooperativesApi.stats(cooperativeId).then((res) => res.data.data),
+    enabled: Boolean(cooperativeId),
   });
 
   // Fetch batches
-  const { data: batches, isLoading } = useQuery({
+  const {
+    data: batches = [],
+    isLoading,
+    error: batchesError,
+  } = useQuery({
     queryKey: ['my-batches'],
     queryFn: () => batchesApi.myBatches().then((res) => res.data.data),
-    enabled: !!user.cooperativeId,
+    enabled: Boolean(cooperativeId),
   });
 
   return (
@@ -86,128 +107,171 @@ export default function Dashboard() {
             {user.cooperative?.name || 'No cooperative assigned'}
           </p>
         </div>
-        <Button onClick={() => setShowNewBatch(true)}>
-          + Register batch
-        </Button>
+        {canManageInventory && (
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+            <Button variant="secondary" onClick={() => setShowNewBatch(true)}>
+              Register batch
+            </Button>
+            <Button onClick={() => setShowNewListing(true)}>
+              Create listing
+            </Button>
+          </div>
+        )}
       </div>
 
-      {!user.cooperativeId && (
+      {!cooperativeId && (
         <Card className="p-6 border-beeswax/30 bg-beeswax/5">
           <p className="text-beeswax text-sm">
-            Your account isn't linked to a cooperative. Contact your admin to be assigned.
+            Your account isn't linked to a cooperative. Contact your admin to be
+            assigned before registering batches or creating listings.
           </p>
         </Card>
       )}
 
-      {/* Stats */}
-      <div className="grid md:grid-cols-3 gap-6 mb-16">
-        <Card className="p-6">
-          <p className="font-mono text-dust text-xs tracking-widest uppercase mb-3">
-            Total batches
-          </p>
-          <p className="font-display text-4xl text-beeswax">
-            {stats?.totalBatches || 0}
-          </p>
-        </Card>
-        <Card className="p-6">
-          <p className="font-mono text-dust text-xs tracking-widest uppercase mb-3">
-            Active listings
-          </p>
-          <p className="font-display text-4xl text-beeswax">
-            {stats?.activeListings || 0}
-          </p>
-        </Card>
-        <Card className="p-6">
-          <p className="font-mono text-dust text-xs tracking-widest uppercase mb-3">
-            Total honey
-          </p>
-          <p className="font-display text-4xl text-beeswax">
-            {stats?.totalWeightKg || 0}
-            <span className="text-lg text-dust ml-2">kg</span>
-          </p>
-        </Card>
-      </div>
-
-      {/* Batches list */}
-      <div>
-        <h2 className="font-display text-2xl text-ivory mb-6">
-          Recent batches
-        </h2>
-
-        {isLoading && (
-          <div className="space-y-4">
-            {[1, 2, 3].map((i) => (
-              <Card key={i} className="p-6 space-y-3">
-                <Skeleton variant="title" className="w-1/3" />
-                <Skeleton className="w-full" />
+      {cooperativeId && (
+        <>
+          {statsError ? (
+            <Card className="mb-8 border-red-500/30 bg-red-500/5 p-6">
+              <p className="text-sm text-red-300">
+                Failed to load cooperative stats: {statsError.message}
+              </p>
+            </Card>
+          ) : (
+            <div className="mb-16 grid gap-6 md:grid-cols-3">
+              <Card className="p-6">
+                <p className="mb-3 font-mono text-xs uppercase tracking-widest text-dust">
+                  Total batches
+                </p>
+                {statsLoading ? (
+                  <Skeleton variant="title" className="w-20" />
+                ) : (
+                  <p className="font-display text-4xl text-beeswax">
+                    {stats?.totalBatches ?? 0}
+                  </p>
+                )}
               </Card>
-            ))}
-          </div>
-        )}
+              <Card className="p-6">
+                <p className="mb-3 font-mono text-xs uppercase tracking-widest text-dust">
+                  Active listings
+                </p>
+                {statsLoading ? (
+                  <Skeleton variant="title" className="w-20" />
+                ) : (
+                  <p className="font-display text-4xl text-beeswax">
+                    {stats?.activeListings ?? 0}
+                  </p>
+                )}
+              </Card>
+              <Card className="p-6">
+                <p className="mb-3 font-mono text-xs uppercase tracking-widest text-dust">
+                  Total honey
+                </p>
+                {statsLoading ? (
+                  <Skeleton variant="title" className="w-28" />
+                ) : (
+                  <p className="font-display text-4xl text-beeswax">
+                    {stats?.totalWeightKg ?? 0}
+                    <span className="ml-2 text-lg text-dust">kg</span>
+                  </p>
+                )}
+              </Card>
+            </div>
+          )}
 
-        {batches && batches.length === 0 && (
-          <Card className="p-6">
-            <EmptyState
-              title="No batches yet"
-              description="Register your first batch to get started."
-              action={
-                <Button onClick={() => setShowNewBatch(true)}>
-                  Register batch
-                </Button>
-              }
-            />
-          </Card>
-        )}
+          <div>
+            <h2 className="mb-6 font-display text-2xl text-ivory">
+              Recent batches
+            </h2>
 
-        {batches && batches.length > 0 && (
-          <div className="space-y-4">
-            {batches.map((batch) => (
-              <Card key={batch.id} className="p-6">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3 mb-2">
-                      <MonoText className="text-beeswax">
-                        {batch.batchId}
-                      </MonoText>
-                      <VerifiedBadge />
+            {isLoading && (
+              <div className="space-y-4">
+                {[1, 2, 3].map((i) => (
+                  <Card key={i} className="space-y-3 p-6">
+                    <Skeleton variant="title" className="w-1/3" />
+                    <Skeleton className="w-full" />
+                  </Card>
+                ))}
+              </div>
+            )}
+
+            {batchesError && (
+              <Card className="border-red-500/30 bg-red-500/5 p-6">
+                <p className="text-sm text-red-300">
+                  Failed to load batches: {batchesError.message}
+                </p>
+              </Card>
+            )}
+
+            {!isLoading && !batchesError && batches.length === 0 && (
+              <Card className="p-6">
+                <EmptyState
+                  title="No batches yet"
+                  description="Register your first batch to get started."
+                  action={
+                    <Button onClick={() => setShowNewBatch(true)}>
+                      Register batch
+                    </Button>
+                  }
+                />
+              </Card>
+            )}
+
+            {batches.length > 0 && (
+              <div className="space-y-4">
+                {batches.map((batch) => (
+                  <Card key={batch.id} className="p-6">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-2 flex items-center gap-3">
+                          <MonoText className="text-beeswax">
+                            {batch.batchId}
+                          </MonoText>
+                          <VerifiedBadge />
+                        </div>
+                        <p className="text-sm text-dust">
+                          {batch.village} · {batch.moistureContent}% moisture ·{' '}
+                          {batch.weightKg}kg · Harvested{' '}
+                          {new Date(batch.harvestDate).toLocaleDateString(
+                            'en-KE',
+                            {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                            }
+                          )}
+                        </p>
+                        {batch.blockchainTxHash && (
+                          <MonoText className="mt-2 block truncate text-xs">
+                            {batch.blockchainTxHash}
+                          </MonoText>
+                        )}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setQrBatchId(batch.batchId)}
+                      >
+                        View QR
+                      </Button>
                     </div>
-                    <p className="text-dust text-sm">
-                      {batch.village} · {batch.moistureContent}% moisture ·{' '}
-                      {batch.weightKg}kg · Harvested{' '}
-                      {new Date(batch.harvestDate).toLocaleDateString(
-                        'en-KE',
-                        { month: 'short', day: 'numeric', year: 'numeric' }
-                      )}
-                    </p>
-                    {batch.blockchainTxHash && (
-                      <MonoText className="block text-xs mt-2 truncate">
-                        {batch.blockchainTxHash}
-                      </MonoText>
-                    )}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setQrBatchId(batch.batchId)}
-                  >
-                    View QR
-                  </Button>
-                </div>
-              </Card>
-            ))}
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      {/* TODO: New batch modal (next phase) */}
       <BatchRegisterModal
         isOpen={showNewBatch}
         onClose={() => setShowNewBatch(false)}
       />
-      <QRCodeModal
-        batchId={qrBatchId}
-        onClose={() => setQrBatchId(null)}
+      <ListingCreateModal
+        isOpen={showNewListing}
+        onClose={() => setShowNewListing(false)}
+        cooperativeId={cooperativeId}
       />
+      <QRCodeModal batchId={qrBatchId} onClose={() => setQrBatchId(null)} />
     </div>
   );
 }

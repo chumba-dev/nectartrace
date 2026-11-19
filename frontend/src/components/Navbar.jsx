@@ -7,6 +7,9 @@ export default function Navbar() {
   const [open, setOpen] = useState(false);
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
+  const canViewOrders = ['BUYER', 'COOPERATIVE_STAFF', 'ADMIN'].includes(
+    user?.role
+  );
 
   const handleLogout = () => {
     logout();
@@ -36,7 +39,7 @@ export default function Navbar() {
           <NavLink to="/verify" className={navLinkClass}>
             Verify
           </NavLink>
-          {user?.role === 'COOPERATIVE_STAFF' && (
+          {['COOPERATIVE_STAFF', 'ADMIN'].includes(user?.role) && (
             <NavLink to="/dashboard" className={navLinkClass}>
               Dashboard
             </NavLink>
@@ -51,9 +54,7 @@ export default function Navbar() {
         <div className="hidden md:flex items-center gap-3">
           {isAuthenticated ? (
             <>
-              <span className="text-sm text-dust">
-                {user.name}
-              </span>
+              <span className="text-sm text-dust">{user.name}</span>
               <Button variant="ghost" size="sm" onClick={handleLogout}>
                 Sign out
               </Button>
@@ -68,7 +69,7 @@ export default function Navbar() {
               </Button>
             </>
           )}
-          {isAuthenticated && (
+          {canViewOrders && (
             <NavLink to="/orders" className={navLinkClass}>
               Orders
             </NavLink>
@@ -107,24 +108,44 @@ export default function Navbar() {
       {open && (
         <div className="md:hidden border-t border-dust/10 bg-obsidian">
           <div className="container-content py-6 flex flex-col gap-4">
-            <NavLink to="/marketplace" className={navLinkClass} onClick={() => setOpen(false)}>
+            <NavLink
+              to="/marketplace"
+              className={navLinkClass}
+              onClick={() => setOpen(false)}
+            >
               Marketplace
             </NavLink>
-            <NavLink to="/verify" className={navLinkClass} onClick={() => setOpen(false)}>
+            <NavLink
+              to="/verify"
+              className={navLinkClass}
+              onClick={() => setOpen(false)}
+            >
               Verify
             </NavLink>
-            {user?.role === 'COOPERATIVE_STAFF' && (
-              <NavLink to="/dashboard" className={navLinkClass} onClick={() => setOpen(false)}>
+            {['COOPERATIVE_STAFF', 'ADMIN'].includes(user?.role) && (
+              <NavLink
+                to="/dashboard"
+                className={navLinkClass}
+                onClick={() => setOpen(false)}
+              >
                 Dashboard
               </NavLink>
             )}
             {user?.role === 'ADMIN' && (
-              <NavLink to="/admin" className={navLinkClass} onClick={() => setOpen(false)}>
+              <NavLink
+                to="/admin"
+                className={navLinkClass}
+                onClick={() => setOpen(false)}
+              >
                 Admin
               </NavLink>
             )}
-            {isAuthenticated && (
-              <NavLink to="/orders" className={navLinkClass} onClick={() => setOpen(false)}>
+            {canViewOrders && (
+              <NavLink
+                to="/orders"
+                className={navLinkClass}
+                onClick={() => setOpen(false)}
+              >
                 Orders
               </NavLink>
             )}
@@ -140,7 +161,12 @@ export default function Navbar() {
                 </>
               ) : (
                 <>
-                  <Button variant="ghost" size="sm" to="/login" className="flex-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    to="/login"
+                    className="flex-1"
+                  >
                     Sign in
                   </Button>
                   <Button size="sm" to="/register" className="flex-1">

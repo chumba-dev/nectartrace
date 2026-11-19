@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import { ordersApi } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import MonoText from '../components/ui/MonoText';
@@ -17,11 +17,18 @@ const statusVariant = {
 };
 
 export default function Orders() {
+  const { user } = useAuth();
+  const isBuyer = user.role === 'BUYER';
+
   useEffect(() => {
     document.title = 'Orders — NectarTrace';
   }, []);
 
-  const { data: orders, isLoading } = useQuery({
+  const {
+    data: orders,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['orders'],
     queryFn: () => ordersApi.list().then((res) => res.data.data),
   });
@@ -33,10 +40,12 @@ export default function Orders() {
           Orders
         </p>
         <h1 className="text-display-lg font-display text-ivory mb-4">
-          Your orders
+          {isBuyer ? 'Your purchases' : 'Cooperative orders'}
         </h1>
         <p className="text-dust">
-          Track purchases and their delivery status.
+          {isBuyer
+            ? 'Track your purchases and their delivery status.'
+            : 'Review orders placed against cooperative listings.'}
         </p>
       </div>
 
@@ -51,12 +60,28 @@ export default function Orders() {
         </div>
       )}
 
+      {error && (
+        <Card className="border-red-500/30 bg-red-500/5 p-6">
+          <p className="text-sm text-red-300">
+            Failed to load orders: {error.message}
+          </p>
+        </Card>
+      )}
+
       {orders && orders.length === 0 && (
         <Card className="p-6">
           <EmptyState
             title="No orders yet"
-            description="Browse the marketplace to find verified Baringo honey."
-            action={<Button to="/marketplace">Browse marketplace</Button>}
+            description={
+              isBuyer
+                ? 'Browse the marketplace to find verified Baringo honey.'
+                : 'New buyer orders will appear here.'
+            }
+            action={
+              isBuyer ? (
+                <Button to="/marketplace">Browse marketplace</Button>
+              ) : null
+            }
           />
         </Card>
       )}

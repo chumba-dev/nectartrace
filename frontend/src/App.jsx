@@ -37,7 +37,9 @@ function App() {
           <Route
             path="/orders"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute
+                allowedRoles={['BUYER', 'COOPERATIVE_STAFF', 'ADMIN']}
+              >
                 <Orders />
               </ProtectedRoute>
             }

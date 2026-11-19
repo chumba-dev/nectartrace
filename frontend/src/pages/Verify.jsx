@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { batchesApi } from '../lib/api';
 import Card from '../components/ui/Card';
@@ -7,11 +7,23 @@ import VerifiedBadge from '../components/ui/VerifiedBadge';
 import MonoText from '../components/ui/MonoText';
 import Badge from '../components/ui/Badge';
 import QRScanner from '../components/QRScanner';
-import { useSearchParams } from 'react-router-dom';
-
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 export default function Verify() {
-  const [batchId, setBatchId] = useState('');
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const urlBatchId = searchParams.get('batchId')?.trim() || '';
+  const inputSource = `${location.key}:${urlBatchId}`;
+  const [batchInput, setBatchInput] = useState(() => ({
+    source: inputSource,
+    value: urlBatchId,
+  }));
+  const autoVerifiedIds = useRef(new Set());
+  const batchId =
+    batchInput.source === inputSource ? batchInput.value : urlBatchId;
+  const updateBatchId = (value) => {
+    setBatchInput({ source: inputSource, value });
+  };
 
   useEffect(() => {
     document.title = 'Verify — NectarTrace';
@@ -20,6 +32,7 @@ export default function Verify() {
   const verifyMutation = useMutation({
     mutationFn: (id) => batchesApi.verify(id).then((res) => res.data),
   });
+  const { mutate: verifyBatch } = verifyMutation;
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -27,15 +40,15 @@ export default function Verify() {
     verifyMutation.mutate(batchId.trim());
   };
 
-  const [searchParams] = useSearchParams();
-
   // Auto-verify if batchId in URL
   useEffect(() => {
-    const urlBatchId = searchParams.get('batchId');
-    if (urlBatchId) {
-      verifyMutation.mutate(urlBatchId);
-    }
-  }, [searchParams, verifyMutation]);
+    if (!urlBatchId) return;
+
+    if (autoVerifiedIds.current.has(urlBatchId)) return;
+
+    autoVerifiedIds.current.add(urlBatchId);
+    verifyBatch(urlBatchId);
+  }, [urlBatchId, verifyBatch]);
 
   const result = verifyMutation.data;
   const error = verifyMutation.error;
@@ -50,8 +63,8 @@ export default function Verify() {
           Proof, not promises.
         </h1>
         <p className="text-dust text-lg text-pretty">
-          Enter a batch ID or scan the QR code on a jar to see its full
-          history — pulled directly from the blockchain.
+          Enter a batch ID or scan the QR code on a jar to see its full history
+          — pulled directly from the blockchain.
         </p>
       </div>
 
@@ -59,13 +72,11 @@ export default function Verify() {
         <Card className="p-8">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm text-dust mb-2">
-                Batch ID
-              </label>
+              <label className="block text-sm text-dust mb-2">Batch ID</label>
               <input
                 type="text"
                 value={batchId}
-                onChange={(e) => setBatchId(e.target.value)}
+                onChange={(e) => updateBatchId(e.target.value)}
                 placeholder="e.g., BAR-2026-001"
                 className="w-full px-4 py-3 bg-obsidian border border-dust/20 rounded-md text-ivory placeholder:text-dust/50 focus:border-beeswax focus:outline-none transition-colors font-mono"
                 required
@@ -75,7 +86,7 @@ export default function Verify() {
               <p className="text-sm text-dust mb-3">Or scan a QR code:</p>
               <QRScanner
                 onScan={(scannedBatchId) => {
-                  setBatchId(scannedBatchId);
+                  updateBatchId(scannedBatchId);
                   verifyMutation.mutate(scannedBatchId);
                 }}
               />
@@ -136,9 +147,7 @@ export default function Verify() {
 
                 <div className="flex justify-between items-baseline pb-3 border-b border-dust/10">
                   <dt className="text-sm text-dust">Cooperative</dt>
-                  <dd className="text-ivory">
-                    {result.data.cooperativeName}
-                  </dd>
+                  <dd className="text-ivory">{result.data.cooperativeName}</dd>
                 </div>
 
                 <div className="flex justify-between items-baseline pb-3 border-b border-dust/10">
@@ -159,9 +168,7 @@ export default function Verify() {
 
                 <div className="flex justify-between items-baseline pb-3 border-b border-dust/10">
                   <dt className="text-sm text-dust">Harvest date</dt>
-                  <dd className="text-ivory">
-                    {result.data.harvestDate}
-                  </dd>
+                  <dd className="text-ivory">{result.data.harvestDate}</dd>
                 </div>
 
                 <div className="flex justify-between items-baseline pb-3 border-b border-dust/10">

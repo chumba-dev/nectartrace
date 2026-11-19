@@ -1,43 +1,73 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+} from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { authApi } from '../lib/api';
 
 const AuthContext = createContext(null);
 
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(true);
+function getInitialAuth() {
+  const storedToken = localStorage.getItem('nectartrace_token');
+  const storedUser = localStorage.getItem('nectartrace_user');
 
-  // Load auth from localStorage on mount
-  useEffect(() => {
-    const storedToken = localStorage.getItem('nectartrace_token');
-    const storedUser = localStorage.getItem('nectartrace_user');
+  if (!storedToken || !storedUser) {
+    return { token: storedToken, user: null };
+  }
 
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser));
+  try {
+    const user = JSON.parse(storedUser);
+    if (!user || typeof user !== 'object' || Array.isArray(user)) {
+      throw new Error('Invalid cached user');
     }
-    setLoading(false);
-  }, []);
+    return { token: storedToken, user };
+  } catch {
+    localStorage.removeItem('nectartrace_token');
+    localStorage.removeItem('nectartrace_user');
+    return { token: null, user: null };
+  }
+}
+
+export function AuthProvider({ children }) {
+  const queryClient = useQueryClient();
+  const [auth] = useState(getInitialAuth);
+  const [user, setUser] = useState(auth.user);
+  const [token, setToken] = useState(auth.token);
+  const [loading] = useState(false);
+
+  const clearSession = useCallback(() => {
+    void queryClient.cancelQueries();
+    queryClient.clear();
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('nectartrace_token');
+    localStorage.removeItem('nectartrace_user');
+  }, [queryClient]);
 
   // Verify token is still valid on mount (if token exists)
   useEffect(() => {
     if (!token) return;
 
+    let active = true;
+
     authApi
       .me()
       .then((res) => {
+        if (!active) return;
         setUser(res.data.data);
         localStorage.setItem('nectartrace_user', JSON.stringify(res.data.data));
       })
       .catch(() => {
-        // Token invalid — clear
-        setToken(null);
-        setUser(null);
-        localStorage.removeItem('nectartrace_token');
-        localStorage.removeItem('nectartrace_user');
+        if (active) clearSession();
       });
-  }, [token]);
+
+    return () => {
+      active = false;
+    };
+  }, [clearSession, token]);
 
   const login = useCallback(async (phone, password) => {
     const res = await authApi.login({ phone, password });
@@ -64,11 +94,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
-    setUser(null);
-    setToken(null);
-    localStorage.removeItem('nectartrace_token');
-    localStorage.removeItem('nectartrace_user');
-  }, []);
+    clearSession();
+  }, [clearSession]);
 
   const value = {
     user,

@@ -6,13 +6,28 @@ const logger = require('../utils/logger');
 // POST /api/auth/register
 async function register(req, res, next) {
   try {
-    const { name, phone, email, password, role, cooperativeId } = req.body;
+    const { name, phone, email, password, role } = req.body;
 
     // Validate
     if (!name || !phone || !password) {
       return res.status(400).json({
         success: false,
         message: 'Name, phone, and password are required',
+      });
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters long',
+      });
+    }
+
+    const publicRoles = ['BUYER', 'COOPERATIVE_STAFF'];
+    if (!publicRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: `Role must be one of: ${publicRoles.join(', ')}`,
       });
     }
 
@@ -35,8 +50,8 @@ async function register(req, res, next) {
         phone,
         email,
         passwordHash,
-        role: role || 'FARMER',
-        cooperativeId: cooperativeId || null,
+        role,
+        cooperativeId: null,
       },
       select: {
         id: true,
@@ -137,6 +152,7 @@ async function getMe(req, res, next) {
         phone: user.phone,
         email: user.email,
         role: user.role,
+        cooperativeId: user.cooperativeId,
         cooperative: user.cooperative,
         walletAddress: user.walletAddress,
         createdAt: user.createdAt,
