@@ -15,7 +15,9 @@ function getInitialAuth() {
   const storedUser = localStorage.getItem('nectartrace_user');
 
   if (!storedToken || !storedUser) {
-    return { token: storedToken, user: null };
+    localStorage.removeItem('nectartrace_token');
+    localStorage.removeItem('nectartrace_user');
+    return { token: null, user: null };
   }
 
   try {
@@ -47,6 +49,17 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('nectartrace_user');
   }, [queryClient]);
 
+  const persistSession = useCallback(
+    (userData, newToken) => {
+      queryClient.clear();
+      setUser(userData);
+      setToken(newToken);
+      localStorage.setItem('nectartrace_token', newToken);
+      localStorage.setItem('nectartrace_user', JSON.stringify(userData));
+    },
+    [queryClient]
+  );
+
   // Verify token is still valid on mount (if token exists)
   useEffect(() => {
     if (!token) return;
@@ -69,29 +82,32 @@ export function AuthProvider({ children }) {
     };
   }, [clearSession, token]);
 
-  const login = useCallback(async (phone, password) => {
-    const res = await authApi.login({ phone, password });
-    const { user: userData, token: newToken } = res.data.data;
+  const login = useCallback(
+    async (identifier, password) => {
+      const res = await authApi.login({ identifier, password });
+      const { user: userData, token: newToken } = res.data.data;
 
-    setUser(userData);
-    setToken(newToken);
-    localStorage.setItem('nectartrace_token', newToken);
-    localStorage.setItem('nectartrace_user', JSON.stringify(userData));
-
-    return userData;
-  }, []);
+      persistSession(userData, newToken);
+      return userData;
+    },
+    [persistSession]
+  );
 
   const register = useCallback(async (data) => {
     const res = await authApi.register(data);
-    const { user: userData, token: newToken } = res.data.data;
-
-    setUser(userData);
-    setToken(newToken);
-    localStorage.setItem('nectartrace_token', newToken);
-    localStorage.setItem('nectartrace_user', JSON.stringify(userData));
-
-    return userData;
+    return res.data.data;
   }, []);
+
+  const googleLogin = useCallback(
+    async (data) => {
+      const res = await authApi.google(data);
+      const { user: userData, token: newToken } = res.data.data;
+
+      persistSession(userData, newToken);
+      return userData;
+    },
+    [persistSession]
+  );
 
   const logout = useCallback(() => {
     clearSession();
@@ -104,6 +120,7 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!user,
     login,
     register,
+    googleLogin,
     logout,
   };
 

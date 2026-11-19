@@ -11,6 +11,11 @@ import MonoText from '../components/ui/MonoText';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
 import ListingImage from '../components/ListingImage';
+import {
+  clearPendingOrder,
+  getPendingOrder,
+  savePendingOrder,
+} from '../lib/pendingOrder';
 
 export default function ListingDetail() {
   const { id } = useParams();
@@ -19,11 +24,17 @@ export default function ListingDetail() {
   const queryClient = useQueryClient();
   const redirectTimerRef = useRef(null);
   const canOrder = user?.role === 'BUYER';
+  const [initialPendingOrder] = useState(() => getPendingOrder(id));
 
-  const [quantity, setQuantity] = useState('');
-  const [notes, setNotes] = useState('');
+  const [quantity, setQuantity] = useState(() =>
+    initialPendingOrder ? String(initialPendingOrder.quantityKg) : ''
+  );
+  const [notes, setNotes] = useState(initialPendingOrder?.notes || '');
   const [orderError, setOrderError] = useState('');
   const [orderSuccess, setOrderSuccess] = useState(false);
+  const [restoredOrder, setRestoredOrder] = useState(
+    Boolean(initialPendingOrder)
+  );
 
   useEffect(() => {
     document.title = 'Listing — NectarTrace';
@@ -49,6 +60,8 @@ export default function ListingDetail() {
       queryClient.invalidateQueries({ queryKey: ['listings'] });
       queryClient.invalidateQueries({ queryKey: ['listing', id] });
       setOrderSuccess(true);
+      clearPendingOrder(id);
+      setRestoredOrder(false);
       setQuantity('');
       setNotes('');
       toast.success('Order placed');
@@ -67,19 +80,26 @@ export default function ListingDetail() {
     e.preventDefault();
     setOrderError('');
 
+    const qty = parseFloat(quantity);
+    if (!Number.isFinite(qty) || qty <= 0 || qty > listing.quantityKg) {
+      setOrderError(`Quantity must be between 0 and ${listing.quantityKg}kg`);
+      return;
+    }
+
     if (!isAuthenticated) {
-      navigate('/login', { state: { from: { pathname: `/listings/${id}` } } });
+      savePendingOrder({ listingId: id, quantityKg: qty, notes });
+      navigate('/login', {
+        state: {
+          from: { pathname: `/listings/${id}` },
+          authNotice:
+            'Sign in or create a buyer account to continue your order.',
+        },
+      });
       return;
     }
 
     if (!canOrder) {
       setOrderError('Only buyer accounts can place marketplace orders');
-      return;
-    }
-
-    const qty = parseFloat(quantity);
-    if (!Number.isFinite(qty) || qty <= 0 || qty > listing.quantityKg) {
-      setOrderError(`Quantity must be between 0 and ${listing.quantityKg}kg`);
       return;
     }
 
@@ -224,6 +244,12 @@ export default function ListingDetail() {
               </div>
             ) : (
               <form onSubmit={handleOrder} className="space-y-4">
+                {restoredOrder && (
+                  <div className="rounded-md border border-beeswax/30 bg-beeswax/10 px-4 py-3 text-sm text-beeswax">
+                    Your order details were restored. Review them before placing
+                    the order.
+                  </div>
+                )}
                 {orderError && (
                   <div className="bg-red-500/10 border border-red-500/30 text-red-300 text-sm px-4 py-3 rounded-md">
                     {orderError}

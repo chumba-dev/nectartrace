@@ -11,6 +11,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Modal from '../components/ui/Modal';
 import BatchRegisterModal from '../components/BatchRegisterModal';
 import ListingCreateModal from '../components/ListingCreateModal';
+import HarvestOffersSection from '../components/HarvestOffersSection';
 
 function QRCodeModal({ batchId, onClose }) {
   const { data, isLoading, error } = useQuery({
@@ -63,8 +64,7 @@ export default function Dashboard() {
   const [qrBatchId, setQrBatchId] = useState(null);
   const cooperativeId = user.cooperativeId ?? user.cooperative?.id;
   const canManageInventory =
-    Boolean(cooperativeId) &&
-    ['COOPERATIVE_STAFF', 'ADMIN'].includes(user.role);
+    Boolean(cooperativeId) && user.role === 'COOPERATIVE_STAFF';
 
   useEffect(() => {
     document.title = 'Dashboard — NectarTrace';
@@ -177,6 +177,8 @@ export default function Dashboard() {
               </Card>
             </div>
           )}
+
+          <HarvestOffersSection />
 
           <div>
             <h2 className="mb-6 font-display text-2xl text-ivory">

@@ -35,7 +35,10 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     // 401 — token expired or invalid
-    if (error.response?.status === 401) {
+    if (
+      error.response?.status === 401 &&
+      localStorage.getItem('nectartrace_token')
+    ) {
       localStorage.removeItem('nectartrace_token');
       localStorage.removeItem('nectartrace_user');
       // Only redirect if not already on login page
@@ -45,12 +48,18 @@ api.interceptors.response.use(
     }
 
     // Normalize error shape
-    const message =
-      error.response?.data?.message ||
-      error.message ||
-      'Something went wrong';
+    const responseData = error.response?.data;
+    const normalizedError = new Error(
+      responseData?.message || error.message || 'Something went wrong'
+    );
 
-    return Promise.reject(new Error(message));
+    normalizedError.name = 'ApiError';
+    normalizedError.status = error.response?.status ?? null;
+    normalizedError.code =
+      responseData?.code || responseData?.error?.code || error.code || null;
+    normalizedError.data = responseData ?? null;
+
+    return Promise.reject(normalizedError);
   }
 );
 
@@ -63,6 +72,9 @@ export default api;
 export const authApi = {
   register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
+  verifyEmail: (data) => api.post('/auth/verify-email', data),
+  resendVerification: (data) => api.post('/auth/resend-verification', data),
+  google: (data) => api.post('/auth/google', data),
   me: () => api.get('/auth/me'),
   updateMe: (data) => api.put('/auth/me', data),
 };
@@ -89,8 +101,7 @@ export const ordersApi = {
   create: (data) => api.post('/orders', data),
   list: () => api.get('/orders'),
   get: (id) => api.get(`/orders/${id}`),
-  updateStatus: (id, status) =>
-    api.put(`/orders/${id}/status`, { status }),
+  updateStatus: (id, status) => api.put(`/orders/${id}/status`, { status }),
 };
 
 export const pricesApi = {
@@ -103,4 +114,12 @@ export const cooperativesApi = {
   get: (id) => api.get(`/cooperatives/${id}`),
   stats: (id) => api.get(`/cooperatives/${id}/stats`),
   create: (data) => api.post('/cooperatives', data),
+};
+
+export const harvestOffersApi = {
+  list: () => api.get('/harvest-offers'),
+  updateStatus: (id, data) => api.put(`/harvest-offers/${id}/status`, data),
+  verify: (id, data) => api.post(`/harvest-offers/${id}/verify`, data),
+  updateSettlement: (id, data) =>
+    api.put(`/harvest-offers/${id}/settlement`, data),
 };

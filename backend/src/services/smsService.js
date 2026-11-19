@@ -54,10 +54,10 @@ async function sendHarvestConfirmation(phoneNumber, weightKg, totalThisMonth) {
 }
 
 /**
- * Send listing confirmation SMS
+ * Send harvest-offer confirmation SMS
  */
-async function sendListingConfirmation(phoneNumber, quantityKg, pricePerKg) {
-  const message = `NectarTrace: Listed ${quantityKg}kg at KES ${pricePerKg}/kg. Buyers can now see your honey.`;
+async function sendHarvestOfferConfirmation(phoneNumber, reference, cooperativeName) {
+  const message = `NectarTrace: Offer ${reference} was submitted to ${cooperativeName}.`;
   return sendSMS(phoneNumber, message);
 }
 
@@ -71,6 +71,6 @@ async function sendNotification(phoneNumber, message) {
 module.exports = {
   sendSMS,
   sendHarvestConfirmation,
-  sendListingConfirmation,
+  sendHarvestOfferConfirmation,
   sendNotification,
 };

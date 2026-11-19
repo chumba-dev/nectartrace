@@ -124,7 +124,10 @@ export default function Landing() {
               </p>
               <div className="flex flex-wrap gap-4">
                 <Button size="lg" to="/register">
-                  Create an account
+                  Create buyer account
+                </Button>
+                <Button size="lg" variant="outline" to="/register/cooperative">
+                  Cooperative staff access
                 </Button>
                 <Button size="lg" variant="ghost" to="/marketplace">
                   Browse marketplace →

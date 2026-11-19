@@ -31,6 +31,25 @@ enum OrderStatus {
   CANCELLED
 }
 
+enum HarvestOfferStatus {
+  SUBMITTED
+  ACCEPTED
+  REJECTED
+  RECEIVED
+  VERIFIED
+}
+
+enum SettlementType {
+  DIRECT_PURCHASE
+  CONSIGNMENT
+}
+
+enum SettlementStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+}
+
 // ============================================
 // MODELS
 // ============================================
@@ -46,27 +65,34 @@ model Cooperative {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  users    User[]
-  batches  HoneyBatch[]
-  listings Listing[]
+  users             User[]
+  batches           HoneyBatch[]
+  listings          Listing[]
+  harvestOffers     HarvestOffer[]
+  farmerSettlements FarmerSettlement[]
 }
 
 model User {
-  id            Int      @id @default(autoincrement())
-  name          String
-  phone         String   @unique
-  email         String?  @unique
-  passwordHash  String
-  role          UserRole @default(FARMER)
-  cooperativeId Int?
-  walletAddress String?
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              Int       @id @default(autoincrement())
+  name            String
+  phone           String    @unique
+  email           String?   @unique
+  passwordHash    String?
+  googleId        String?   @unique
+  emailVerifiedAt DateTime?
+  role            UserRole  @default(FARMER)
+  cooperativeId   Int?
+  walletAddress   String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  cooperative Cooperative? @relation(fields: [cooperativeId], references: [id])
-  orders      Order[]      @relation("BuyerOrders")
-  harvestLogs HarvestLog[]
+  cooperative            Cooperative?            @relation(fields: [cooperativeId], references: [id])
+  orders                 Order[]                 @relation("BuyerOrders")
+  harvestLogs            HarvestLog[]
+  harvestOffers          HarvestOffer[]          @relation("FarmerHarvestOffers")
+  farmerSettlements      FarmerSettlement[]      @relation("FarmerSettlements")
+  emailVerificationToken EmailVerificationToken?
 
   @@index([cooperativeId])
 }
@@ -87,11 +113,76 @@ model HoneyBatch {
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
-  cooperative Cooperative @relation(fields: [cooperativeId], references: [id])
-  listings    Listing[]
+  cooperative  Cooperative   @relation(fields: [cooperativeId], references: [id])
+  listings     Listing[]
+  harvestOffer HarvestOffer?
 
   @@index([cooperativeId])
   @@index([status])
+}
+
+model HarvestOffer {
+  id                 Int                @id @default(autoincrement())
+  reference          String             @unique
+  ussdSessionId      String?            @unique
+  farmerId           Int
+  cooperativeId      Int
+  pickupVillage      String
+  offeredWeightKg    Float
+  expectedPricePerKg Float?
+  settlementType     SettlementType
+  status             HarvestOfferStatus @default(SUBMITTED)
+  acceptedWeightKg   Float?
+  agreedPricePerKg   Float?
+  rejectionReason    String?
+  honeyBatchId       Int?               @unique
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  farmer      User              @relation("FarmerHarvestOffers", fields: [farmerId], references: [id])
+  cooperative Cooperative       @relation(fields: [cooperativeId], references: [id])
+  batch       HoneyBatch?       @relation(fields: [honeyBatchId], references: [id])
+  settlement  FarmerSettlement?
+
+  @@index([farmerId, createdAt])
+  @@index([cooperativeId, status])
+}
+
+model FarmerSettlement {
+  id               Int              @id @default(autoincrement())
+  offerId          Int              @unique
+  farmerId         Int
+  cooperativeId    Int
+  type             SettlementType
+  grossAmount      Float
+  commissionAmount Float
+  netAmount        Float
+  amountPaid       Float            @default(0)
+  status           SettlementStatus @default(PENDING)
+  paymentReference String?
+  paidAt           DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  offer       HarvestOffer @relation(fields: [offerId], references: [id])
+  farmer      User         @relation("FarmerSettlements", fields: [farmerId], references: [id])
+  cooperative Cooperative  @relation(fields: [cooperativeId], references: [id])
+
+  @@index([farmerId, status])
+  @@index([cooperativeId, status])
+}
+
+model EmailVerificationToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
 }
 
 model Listing {

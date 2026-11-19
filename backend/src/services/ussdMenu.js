@@ -7,7 +7,7 @@ function mainMenu() {
     '1. Log harvest\n' +
     '2. Check market price\n' +
     '3. My account\n' +
-    '4. List honey for sale'
+    '4. Offer harvest to cooperative'
   );
 }
 
@@ -19,17 +19,36 @@ function askHarvestWeight() {
 }
 
 /**
- * Prompt for listing quantity
+ * Show cooperative choices
  */
-function askListingQuantity() {
-  return 'CON Enter quantity (kg):';
+function askPickupVillage() {
+  return 'CON Enter your village or pickup area:';
+}
+
+function cooperativeSelection(cooperatives, pickupVillage) {
+  const choices = cooperatives
+    .map((cooperative, index) => `${index + 1}. ${cooperative.name} (${cooperative.village})`)
+    .join('\n');
+  return `CON Cooperatives near ${pickupVillage}:\n${choices}`;
 }
 
 /**
- * Prompt for listing price
+ * Prompt for an offer's weight and expected price
  */
-function askListingPrice(quantityKg) {
-  return `CON Quantity: ${quantityKg}kg\nEnter price per kg (KES):`;
+function askOfferWeight(cooperativeName) {
+  return `CON ${cooperativeName}\nEnter offered weight (kg):`;
+}
+
+function askExpectedPrice(weightKg) {
+  return `CON Offered: ${weightKg}kg\nEnter expected KES/kg (or 0 to skip):`;
+}
+
+function askSettlementType() {
+  return (
+    'CON Select settlement type:\n' +
+    '1. Direct cooperative purchase\n' +
+    '2. Consignment'
+  );
 }
 
 /**
@@ -68,12 +87,12 @@ function harvestConfirmation(weightKg, totalThisMonth) {
 }
 
 /**
- * Listing confirmation
+ * Harvest-offer confirmation
  */
-function listingConfirmation(quantityKg, pricePerKg) {
+function offerConfirmation(reference, cooperativeName) {
   return (
-    `END Listed ${quantityKg}kg at KES ${pricePerKg}/kg.\n` +
-    'Buyers can now see your honey.'
+    `END Offer ${reference} submitted to ${cooperativeName}.\n` +
+    'Confirmation sent via SMS.'
   );
 }
 
@@ -87,12 +106,15 @@ function errorMessage(message = 'An error occurred. Please try again.') {
 module.exports = {
   mainMenu,
   askHarvestWeight,
-  askListingQuantity,
-  askListingPrice,
+  askPickupVillage,
+  cooperativeSelection,
+  askOfferWeight,
+  askExpectedPrice,
+  askSettlementType,
   marketPrice,
   accountSummary,
   harvestConfirmation,
-  listingConfirmation,
+  offerConfirmation,
   errorMessage,
   phoneNotRegistered,
   invalidInput,

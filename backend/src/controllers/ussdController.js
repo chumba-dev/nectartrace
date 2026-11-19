@@ -1,7 +1,6 @@
 const logger = require('../utils/logger');
 const menu = require('../services/ussdMenu');
 const handlers = require('../services/ussdHandlers');
-const sessionService = require('../services/ussdSessionService');
 
 /**
  * Main USSD handler
@@ -13,19 +12,14 @@ async function handleUSSD(req, res, next) {
   try {
     const { sessionId, phoneNumber, text } = req.body;
 
-    logger.info('USSD request', {
-      sessionId,
-      phoneNumber,
-      text: text || '(empty)',
-    });
-
     // Validate required fields
     if (!sessionId || !phoneNumber) {
       return res.send(menu.errorMessage('Invalid request'));
     }
 
     // Parse input path: "1*15" → ["1", "15"]
-    const inputs = text ? text.split('*').filter(Boolean) : [];
+    const inputs = text ? text.split('*') : [];
+    logger.info('USSD request', { sessionId, inputCount: inputs.length });
 
     // Route based on first input
     let response;
@@ -40,7 +34,7 @@ async function handleUSSD(req, res, next) {
     } else if (inputs[0] === '3') {
       response = await handlers.handleMyAccount(phoneNumber);
     } else if (inputs[0] === '4') {
-      response = await handlers.handleListHoney(inputs, phoneNumber);
+      response = await handlers.handleHarvestOffer(inputs, phoneNumber, sessionId);
     } else {
       response = menu.errorMessage('Invalid option. Please try again.');
     }
@@ -49,7 +43,6 @@ async function handleUSSD(req, res, next) {
     logger.info('USSD response', {
       sessionId,
       elapsedMs: elapsed,
-      response: response.substring(0, 50),
     });
 
     // Warn if slow

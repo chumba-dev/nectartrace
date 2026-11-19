@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { ordersApi } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import Card from '../components/ui/Card';
@@ -18,7 +19,9 @@ const statusVariant = {
 
 export default function Orders() {
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   const isBuyer = user.role === 'BUYER';
+  const canManageOrders = ['COOPERATIVE_STAFF', 'ADMIN'].includes(user.role);
 
   useEffect(() => {
     document.title = 'Orders — NectarTrace';
@@ -32,6 +35,28 @@ export default function Orders() {
     queryKey: ['orders'],
     queryFn: () => ordersApi.list().then((res) => res.data.data),
   });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ orderId, status }) =>
+      ordersApi.updateStatus(orderId, status),
+    onSuccess: (_response, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['listings'] });
+      queryClient.invalidateQueries({ queryKey: ['harvest-offers'] });
+      toast.success(
+        variables.status === 'DELIVERED'
+          ? 'Order delivered and settlement totals updated'
+          : `Order marked ${variables.status.toLowerCase()}`
+      );
+    },
+    onError: (mutationError) => {
+      toast.error(mutationError.message || 'Unable to update the order');
+    },
+  });
+
+  const updateStatus = (order, status) => {
+    statusMutation.mutate({ orderId: order.id, status });
+  };
 
   return (
     <div className="container-content py-20">
@@ -111,11 +136,49 @@ export default function Orders() {
                       year: 'numeric',
                     })}
                   </p>
+                  {!isBuyer && order.buyer && (
+                    <p className="mt-2 text-sm text-dust">
+                      Buyer:{' '}
+                      <span className="text-ivory">{order.buyer.name}</span>
+                      {order.buyer.phone ? ` · ${order.buyer.phone}` : ''}
+                    </p>
+                  )}
                 </div>
-                <div className="text-right">
+                <div className="text-left sm:text-right">
                   <p className="font-display text-2xl text-ivory">
                     KES {order.totalPrice.toLocaleString()}
                   </p>
+                  {canManageOrders &&
+                    ['PENDING', 'CONFIRMED'].includes(order.status) && (
+                      <div className="mt-4 flex flex-wrap gap-2 sm:justify-end">
+                        {order.status === 'PENDING' && (
+                          <Button
+                            size="sm"
+                            onClick={() => updateStatus(order, 'CONFIRMED')}
+                            disabled={statusMutation.isPending}
+                          >
+                            Confirm
+                          </Button>
+                        )}
+                        {order.status === 'CONFIRMED' && (
+                          <Button
+                            size="sm"
+                            onClick={() => updateStatus(order, 'DELIVERED')}
+                            disabled={statusMutation.isPending}
+                          >
+                            Mark delivered
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => updateStatus(order, 'CANCELLED')}
+                          disabled={statusMutation.isPending}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
                 </div>
               </div>
             </Card>

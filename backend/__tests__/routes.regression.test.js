@@ -15,6 +15,14 @@ jest.mock('../src/controllers/orderController', () => ({
   updateOrderStatus: jest.fn((req, res) => res.json({ handler: 'updateOrderStatus' })),
 }));
 
+jest.mock('../src/controllers/harvestOfferController', () => ({
+  listOffers: jest.fn((req, res) => res.json({ handler: 'listOffers' })),
+  listMyOffers: jest.fn((req, res) => res.json({ handler: 'listMyOffers' })),
+  updateOfferStatus: jest.fn((req, res) => res.json({ handler: 'updateOfferStatus' })),
+  verifyOffer: jest.fn((req, res) => res.status(201).json({ handler: 'verifyOffer' })),
+  upsertSettlement: jest.fn((req, res) => res.json({ handler: 'upsertSettlement' })),
+}));
+
 jest.mock('../src/middleware/auth', () => ({
   authenticate: jest.fn((req, res, next) => {
     req.user = {
@@ -36,13 +44,16 @@ const express = require('express');
 const request = require('supertest');
 const batchController = require('../src/controllers/batchController');
 const orderController = require('../src/controllers/orderController');
+const harvestOfferController = require('../src/controllers/harvestOfferController');
 const batchRouter = require('../src/routes/batches');
 const orderRouter = require('../src/routes/orders');
+const harvestOfferRouter = require('../src/routes/harvestOffers');
 
 const app = express();
 app.use(express.json());
 app.use('/batches', batchRouter);
 app.use('/orders', orderRouter);
+app.use('/harvest-offers', harvestOfferRouter);
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -129,4 +140,42 @@ describe('order route role gates', () => {
       expect(orderController.updateOrderStatus).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('harvest-offer route role gates', () => {
+  test('FARMER reaches /my before staff-only routes', async () => {
+    const response = await request(app)
+      .get('/harvest-offers/my')
+      .set('x-test-role', 'FARMER');
+
+    expect(response.status).toBe(200);
+    expect(response.body.handler).toBe('listMyOffers');
+    expect(harvestOfferController.listMyOffers).toHaveBeenCalledTimes(1);
+    expect(harvestOfferController.listOffers).not.toHaveBeenCalled();
+  });
+
+  test.each(['COOPERATIVE_STAFF', 'ADMIN'])(
+    '%s can list and manage harvest offers',
+    async (role) => {
+      const listResponse = await request(app)
+        .get('/harvest-offers')
+        .set('x-test-role', role);
+      const statusResponse = await request(app)
+        .put('/harvest-offers/9/status')
+        .set('x-test-role', role)
+        .send({});
+
+      expect(listResponse.status).toBe(200);
+      expect(statusResponse.status).toBe(200);
+    }
+  );
+
+  test('FARMER cannot use staff harvest-offer routes', async () => {
+    const response = await request(app)
+      .get('/harvest-offers')
+      .set('x-test-role', 'FARMER');
+
+    expect(response.status).toBe(403);
+    expect(harvestOfferController.listOffers).not.toHaveBeenCalled();
+  });
 });

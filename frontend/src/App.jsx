@@ -12,6 +12,7 @@ import ListingDetail from './pages/ListingDetail';
 import Orders from './pages/Orders';
 import NotFound from './pages/NotFound';
 import Admin from './pages/Admin';
+import VerifyEmail from './pages/VerifyEmail';
 
 function App() {
   return (
@@ -21,7 +22,12 @@ function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
+          <Route path="/register" element={<Register accountType="BUYER" />} />
+          <Route
+            path="/register/cooperative"
+            element={<Register accountType="COOPERATIVE_STAFF" />}
+          />
+          <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/marketplace" element={<Marketplace />} />
           <Route path="/verify" element={<Verify />} />
           <Route path="/listings/:id" element={<ListingDetail />} />
@@ -29,7 +35,7 @@ function App() {
           <Route
             path="/dashboard"
             element={
-              <ProtectedRoute allowedRoles={['COOPERATIVE_STAFF', 'ADMIN']}>
+              <ProtectedRoute allowedRoles={['COOPERATIVE_STAFF']}>
                 <Dashboard />
               </ProtectedRoute>
             }

@@ -39,7 +39,7 @@ export default function Navbar() {
           <NavLink to="/verify" className={navLinkClass}>
             Verify
           </NavLink>
-          {['COOPERATIVE_STAFF', 'ADMIN'].includes(user?.role) && (
+          {user?.role === 'COOPERATIVE_STAFF' && (
             <NavLink to="/dashboard" className={navLinkClass}>
               Dashboard
             </NavLink>
@@ -65,7 +65,7 @@ export default function Navbar() {
                 Sign in
               </Button>
               <Button size="sm" to="/register">
-                Get started
+                Create buyer account
               </Button>
             </>
           )}
@@ -122,7 +122,7 @@ export default function Navbar() {
             >
               Verify
             </NavLink>
-            {['COOPERATIVE_STAFF', 'ADMIN'].includes(user?.role) && (
+            {user?.role === 'COOPERATIVE_STAFF' && (
               <NavLink
                 to="/dashboard"
                 className={navLinkClass}
@@ -170,7 +170,7 @@ export default function Navbar() {
                     Sign in
                   </Button>
                   <Button size="sm" to="/register" className="flex-1">
-                    Get started
+                    Join as buyer
                   </Button>
                 </>
               )}
