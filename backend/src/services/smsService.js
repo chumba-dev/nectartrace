@@ -14,11 +14,14 @@ async function sendSMS(phoneNumber, message) {
   try {
     const sms = getSMS();
 
-    const result = await sms.send({
+    const payload = {
       to: [phoneNumber],
       message,
-      from: env.africasTalking.senderId || 'NectarTrace',
-    });
+      ...(env.africasTalking.senderId && {
+        from: env.africasTalking.senderId,
+      }),
+    };
+    const result = await sms.send(payload);
 
     logger.info('SMS sent', { phoneNumber, message: message.substring(0, 50) });
 

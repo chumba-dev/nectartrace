@@ -17,6 +17,7 @@ module.exports = {
     apiKey: process.env.AT_API_KEY,
     username: process.env.AT_USERNAME || 'sandbox',
     shortcode: process.env.AT_SHORTCODE || '*483#',
+    senderId: process.env.AT_SENDER_ID || '',
   },
 
   blockchain: {
