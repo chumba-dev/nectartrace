@@ -4,9 +4,10 @@ pragma solidity ^0.8.19;
 import "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
- * @title HoneyBatch
+ * @title HoneyBatch v2
  * @notice Immutable registry of verified honey batches from Baringo County
  * @dev Only registered cooperatives can record batches. Anyone can read.
+ *      Lot, farmer, offer, and payment data must remain off-chain.
  */
 contract HoneyBatch is AccessControl {
 
@@ -25,8 +26,9 @@ contract HoneyBatch is AccessControl {
         string village;           // e.g., "Kabarnet"
         string cooperativeName;   // e.g., "Baringo Highlands Honey Cooperative"
         uint256 moistureContent;  // stored as integer: 185 = 18.5%
-        uint256 weightKg;         // weight in kilograms
+        uint256 weightGrams;      // aggregate weight in grams
         string harvestDate;       // ISO format: "2026-09-15"
+        bytes32 lotIdsHash;        // commitment to sorted off-chain Mongo Offer IDs
         address verifiedBy;       // cooperative wallet address
         uint256 timestamp;        // block timestamp when recorded
     }
@@ -56,7 +58,8 @@ contract HoneyBatch is AccessControl {
         string village,
         string cooperativeName,
         uint256 moistureContent,
-        uint256 weightKg,
+        uint256 weightGrams,
+        bytes32 lotIdsHash,
         address indexed verifiedBy,
         uint256 timestamp
     );
@@ -70,8 +73,9 @@ contract HoneyBatch is AccessControl {
     // ============================================
 
     constructor() {
-        // Deployer becomes admin
+        // This backend uses the deployer as its explicit central relayer.
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(COOPERATIVE_ROLE, msg.sender);
     }
 
     // ============================================
@@ -124,23 +128,28 @@ contract HoneyBatch is AccessControl {
      * @param village Village where harvested
      * @param cooperativeName Name of the cooperative
      * @param moistureContent Moisture content (185 = 18.5%)
-     * @param weightKg Weight in kilograms
+     * @param weightGrams Aggregate weight in grams
      * @param harvestDate Harvest date in ISO format
+     * @param lotIdsHash Commitment computed off-chain from the batch's sorted lot IDs
      */
     function recordBatch(
         string memory batchId,
         string memory village,
         string memory cooperativeName,
         uint256 moistureContent,
-        uint256 weightKg,
-        string memory harvestDate
+        uint256 weightGrams,
+        string memory harvestDate,
+        bytes32 lotIdsHash
     ) external onlyRole(COOPERATIVE_ROLE) {
         // Validation
         require(bytes(batchId).length > 0, "Batch ID required");
         require(!batchExists[batchId], "Batch ID already exists");
         require(bytes(village).length > 0, "Village required");
+        require(bytes(cooperativeName).length > 0, "Cooperative name required");
         require(moistureContent > 0 && moistureContent < 1000, "Invalid moisture (0-100%)");
-        require(weightKg > 0, "Weight must be positive");
+        require(weightGrams > 0, "Weight must be positive");
+        require(bytes(harvestDate).length > 0, "Harvest date required");
+        require(lotIdsHash != bytes32(0), "Lot IDs hash required");
 
         // Create batch
         Batch memory newBatch = Batch({
@@ -148,8 +157,9 @@ contract HoneyBatch is AccessControl {
             village: village,
             cooperativeName: cooperativeName,
             moistureContent: moistureContent,
-            weightKg: weightKg,
+            weightGrams: weightGrams,
             harvestDate: harvestDate,
+            lotIdsHash: lotIdsHash,
             verifiedBy: msg.sender,
             timestamp: block.timestamp
         });
@@ -166,7 +176,8 @@ contract HoneyBatch is AccessControl {
             village,
             cooperativeName,
             moistureContent,
-            weightKg,
+            weightGrams,
+            lotIdsHash,
             msg.sender,
             block.timestamp
         );

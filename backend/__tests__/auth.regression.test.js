@@ -92,7 +92,7 @@ beforeEach(() => {
 });
 
 describe('public registration and verification', () => {
-  test.each(['ADMIN', 'FARMER', 'UNKNOWN_ROLE'])(
+  test.each(['ADMIN', 'UNKNOWN_ROLE'])(
     'rejects the %s role without writing',
     async (role) => {
       const response = await request(app)
@@ -100,7 +100,9 @@ describe('public registration and verification', () => {
         .send({ ...registration, role });
 
       expect(response.status).toBe(400);
-      expect(response.body.message).toBe('Role must be one of: BUYER, COOPERATIVE_STAFF');
+      expect(response.body.message).toBe(
+        'Role must be one of: COOPERATIVE_STAFF, BUYER, FARMER, CONSUMER'
+      );
       expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
       expect(mockPrisma.user.create).not.toHaveBeenCalled();
     }
@@ -119,9 +121,15 @@ describe('public registration and verification', () => {
     expect(mockPrisma.user.create).not.toHaveBeenCalled();
   });
 
-  test.each(['BUYER', 'COOPERATIVE_STAFF'])(
-    'normalizes and creates an unverified %s account without a JWT',
-    async (role) => {
+  test.each([
+    ['BUYER', 'BUYER'],
+    ['FaRmEr', 'FARMER'],
+    ['consumer', 'CONSUMER'],
+    ['CoOpErAtIvE', 'COOPERATIVE_STAFF'],
+    ['cooperative_staff', 'COOPERATIVE_STAFF'],
+  ])(
+    'normalizes %s and creates an unverified %s account without a JWT',
+    async (role, expectedRole) => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
       mockPrisma.user.create.mockImplementation(async ({ data }) => user({
         ...data,
@@ -138,7 +146,7 @@ describe('public registration and verification', () => {
         data: expect.objectContaining({
           email: 'test@example.com',
           phone: '+254700000001',
-          role,
+          role: expectedRole,
           cooperativeId: null,
           passwordHash: 'hashed-password',
         }),
@@ -190,7 +198,6 @@ describe('public registration and verification', () => {
     expect(response.status).toBe(200);
     expect(mockPrisma.emailVerificationToken.findUnique).toHaveBeenCalledWith({
       where: { tokenHash: expect.stringMatching(/^[a-f0-9]{64}$/) },
-      include: { user: true },
     });
     expect(mockPrisma.emailVerificationToken.delete).toHaveBeenCalledWith({ where: { id: 4 } });
     expect(response.body.data.user).not.toHaveProperty('tokenHash');
@@ -223,10 +230,11 @@ describe('identifier login', () => {
       .send({ identifier: ' TEST@example.COM ', password: 'password' });
 
     expect(response.status).toBe(200);
-    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith({
+    expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({
       where: { email: 'test@example.com' },
-      include: { cooperative: true },
-    });
+      select: expect.any(Object),
+    }));
+    expect(mockPrisma.user.findUnique.mock.calls[0][0].select).not.toHaveProperty('ussdPinHash');
     expect(response.body.data.token).toBe('signed-token');
     expect(response.body.data.user).not.toHaveProperty('googleId');
   });
@@ -241,14 +249,14 @@ describe('identifier login', () => {
       .send({ identifier: '0700000001', password: 'password' });
 
     expect(response.status).toBe(200);
-    expect(mockPrisma.user.findUnique).toHaveBeenNthCalledWith(1, {
+    expect(mockPrisma.user.findUnique).toHaveBeenNthCalledWith(1, expect.objectContaining({
       where: { phone: '+254700000001' },
-      include: { cooperative: true },
-    });
-    expect(mockPrisma.user.findUnique).toHaveBeenNthCalledWith(2, {
+      select: expect.any(Object),
+    }));
+    expect(mockPrisma.user.findUnique).toHaveBeenNthCalledWith(2, expect.objectContaining({
       where: { phone: '0700000001' },
-      include: { cooperative: true },
-    });
+      select: expect.any(Object),
+    }));
   });
 
   test('rejects Google-only password login without calling bcrypt', async () => {
@@ -315,6 +323,56 @@ describe('Google authentication', () => {
     expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ['consumer', 'CONSUMER'],
+    ['FARMER', 'FARMER'],
+    ['CoOpErAtIvE', 'COOPERATIVE_STAFF'],
+  ])('creates a new Google account from the %s alias as %s', async (role, expectedRole) => {
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+    mockPrisma.user.create.mockImplementation(async ({ data }) => user({
+      ...data,
+      cooperative: null,
+      isActive: true,
+    }));
+
+    const response = await request(app)
+      .post('/auth/google')
+      .send({ credential: 'google-credential', phone: '0700000001', role });
+
+    expect(response.status).toBe(201);
+    expect(mockPrisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ role: expectedRole, cooperativeId: null }),
+    }));
+    expect(response.body.data.user.role).toBe(expectedRole);
+  });
+
+  test('rejects ADMIN for a new Google account before creation', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(null);
+
+    const response = await request(app)
+      .post('/auth/google')
+      .send({ credential: 'google-credential', phone: '0700000001', role: 'ADMIN' });
+
+    expect(response.status).toBe(400);
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
+  test('authenticates an existing ADMIN without applying the supplied role', async () => {
+    mockPrisma.user.findUnique.mockResolvedValue(user({
+      role: 'ADMIN',
+      googleId: 'google-subject',
+    }));
+
+    const response = await request(app)
+      .post('/auth/google')
+      .send({ credential: 'google-credential', role: 'consumer' });
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.user.role).toBe('ADMIN');
+    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(mockPrisma.user.create).not.toHaveBeenCalled();
+  });
+
   test('links a matching verified Google email without changing its role or cooperative', async () => {
     const existing = user({
       role: 'COOPERATIVE_STAFF',
@@ -333,7 +391,7 @@ describe('Google authentication', () => {
 
     const response = await request(app)
       .post('/auth/google')
-      .send({ credential: 'google-credential', role: 'BUYER' });
+      .send({ credential: 'google-credential', role: 'ADMIN' });
 
     expect(response.status).toBe(200);
     expect(mockPrisma.user.update).toHaveBeenCalledWith(expect.objectContaining({
@@ -354,7 +412,13 @@ test('GET /auth/me exposes verification and Google-link state without googleId',
   const profile = user({
     ...authenticatedUser,
     googleId: 'linked-google-id',
-    cooperative: { id: 7, name: 'Honey Cooperative' },
+    ussdPinHash: 'must-not-leak',
+    cooperative: {
+      id: 7,
+      name: 'Honey Cooperative',
+      commissionPercent: 12,
+      verifiedAt: new Date(),
+    },
   });
 
   verifyToken.mockReturnValue({ userId: authenticatedUser.id });
@@ -373,4 +437,7 @@ test('GET /auth/me exposes verification and Google-link state without googleId',
     isGoogleLinked: true,
   }));
   expect(response.body.data).not.toHaveProperty('googleId');
+  expect(response.body.data).not.toHaveProperty('ussdPinHash');
+  expect(response.body.data.cooperative).not.toHaveProperty('commissionPercent');
+  expect(response.body.data.cooperative).not.toHaveProperty('verifiedAt');
 });

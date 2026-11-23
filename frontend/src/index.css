@@ -10,6 +10,7 @@
   --color-beeswax: #e8a020;
   --color-ivory: #f5f0e8;
   --color-stone: #2a2520;
+  --color-stone-deep: #1e1a16;
   --color-sage: #4a6741;
   --color-dust: #9a8e7e;
 
@@ -19,10 +20,10 @@
   --font-mono: 'DM Mono', monospace;
 
   /* Custom font sizes */
-  --font-size-display-xl: 4.5rem;
-  --font-size-display-lg: 3.5rem;
-  --font-size-display-md: 2.5rem;
-  --font-size-display-sm: 1.875rem;
+  --text-display-xl: 4.5rem;
+  --text-display-lg: 3.5rem;
+  --text-display-md: 2.5rem;
+  --text-display-sm: 1.875rem;
 
   /* Custom max widths */
   --max-width-measure: 72ch;
@@ -68,6 +69,7 @@
     background-color: var(--color-obsidian);
     color: var(--color-ivory);
     font-family: var(--font-body);
+    line-height: 1.6;
   }
 
   h1,
@@ -86,7 +88,6 @@
 
   *:focus-visible {
     outline: none;
-    ring: 2px;
     box-shadow: 0 0 0 2px var(--color-beeswax);
   }
 
@@ -157,5 +158,59 @@
     margin-right: auto;
     width: 100%;
     max-width: var(--max-width-measure);
+  }
+
+  .auth-safe-area {
+    padding-top: max(2rem, env(safe-area-inset-top));
+    padding-bottom: max(2rem, env(safe-area-inset-bottom));
+  }
+
+  .auth-radial {
+    background-image: radial-gradient(
+      circle at 50% 38%,
+      color-mix(in srgb, var(--color-beeswax) 17%, transparent),
+      transparent 58%
+    );
+  }
+
+  .landing-container {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 1140px;
+    padding-inline: clamp(1.25rem, 5vw, 3rem);
+  }
+
+  .landing-reveal {
+    opacity: 1;
+    transform: none;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .landing-reveal {
+      opacity: 0;
+      transform: translateY(22px);
+      transition:
+        opacity 550ms ease var(--landing-reveal-delay, 0ms),
+        transform 550ms ease var(--landing-reveal-delay, 0ms);
+    }
+
+    .landing-reveal.is-visible {
+      opacity: 1;
+      transform: none;
+    }
+
+    @keyframes landing-float {
+      0%,
+      100% {
+        transform: translateY(0);
+      }
+      50% {
+        transform: translateY(-6px);
+      }
+    }
+
+    .landing-float {
+      animation: landing-float 4s ease-in-out infinite;
+    }
   }
 }

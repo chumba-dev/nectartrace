@@ -25,7 +25,28 @@ function phoneLookupCandidates(value) {
 
   const exact = value.trim();
   const normalized = normalizePhone(exact);
-  return [...new Set([normalized, exact].filter(Boolean))];
+  const kenyanVariants = normalized && /^\+254\d{9}$/.test(normalized)
+    ? [`0${normalized.slice(4)}`, normalized.slice(1)]
+    : [];
+  return [...new Set([normalized, exact, ...kenyanVariants].filter(Boolean))];
 }
 
-module.exports = { normalizeEmail, normalizePhone, phoneLookupCandidates };
+const PUBLIC_ROLE_ALIASES = {
+  buyer: 'BUYER',
+  farmer: 'FARMER',
+  consumer: 'CONSUMER',
+  cooperative: 'COOPERATIVE_STAFF',
+  cooperative_staff: 'COOPERATIVE_STAFF',
+};
+
+function normalizePublicRole(value) {
+  if (typeof value !== 'string') return null;
+  return PUBLIC_ROLE_ALIASES[value.trim().toLowerCase()] || null;
+}
+
+module.exports = {
+  normalizeEmail,
+  normalizePhone,
+  phoneLookupCandidates,
+  normalizePublicRole,
+};

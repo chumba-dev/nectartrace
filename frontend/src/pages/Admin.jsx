@@ -17,6 +17,8 @@ const adminApi = {
   changeRole: (userId, role) =>
     api.put(`/admin/users/${userId}/role`, { role }),
   createCooperative: (data) => api.post('/admin/cooperatives', data),
+  verifyCooperative: (cooperativeId) =>
+    api.put(`/admin/cooperatives/${cooperativeId}/verify`),
   stats: () => api.get('/admin/stats'),
 };
 
@@ -26,6 +28,25 @@ const roleVariant = {
   BUYER: 'default',
   FARMER: 'default',
 };
+
+function formatCommission(value) {
+  const commission = Number(value);
+  if (!Number.isFinite(commission)) return 'Unavailable';
+  return `${new Intl.NumberFormat('en-KE', {
+    maximumFractionDigits: 2,
+  }).format(commission)}%`;
+}
+
+function formatDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString('en-KE', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
 
 export default function Admin() {
   const queryClient = useQueryClient();
@@ -78,7 +99,20 @@ export default function Admin() {
     onError: (err) => toast.error(err.message),
   });
 
+  const verifyMutation = useMutation({
+    mutationFn: (cooperativeId) => adminApi.verifyCooperative(cooperativeId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cooperatives'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+      toast.success('Cooperative verified');
+    },
+    onError: (err) =>
+      toast.error(err.message || 'Failed to verify cooperative'),
+  });
+
   const cooperativeIds = new Set(cooperatives.map((coop) => coop.id));
+  const verifiedCooperatives = cooperatives.filter((coop) => coop.isVerified);
   const cooperativeStaff = users.filter(
     (account) => account.role === 'COOPERATIVE_STAFF'
   );
@@ -107,22 +141,35 @@ export default function Admin() {
   const cooperativeSelect = (
     account,
     placeholder = 'Assign cooperative...'
-  ) => (
-    <select
-      value={account.cooperativeId || ''}
-      onChange={(event) => assignCooperative(account, event.target.value)}
-      disabled={assignMutation.isPending || cooperatives.length === 0}
-      aria-label={`Assign ${account.name} to a cooperative`}
-      className="w-full rounded-md border border-dust/20 bg-obsidian px-3 py-2 text-sm text-ivory focus:border-beeswax focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-    >
-      <option value="">{placeholder}</option>
-      {cooperatives.map((coop) => (
-        <option key={coop.id} value={coop.id}>
-          {coop.name}
-        </option>
-      ))}
-    </select>
-  );
+  ) => {
+    const currentCooperative = cooperatives.find(
+      (coop) => coop.id === account.cooperativeId
+    );
+    const currentIsPending =
+      currentCooperative && !currentCooperative.isVerified;
+
+    return (
+      <select
+        value={account.cooperativeId || ''}
+        onChange={(event) => assignCooperative(account, event.target.value)}
+        disabled={assignMutation.isPending || verifiedCooperatives.length === 0}
+        aria-label={`Assign ${account.name} to a verified cooperative`}
+        className="w-full rounded-md border border-dust/20 bg-obsidian px-3 py-2 text-sm text-ivory focus:border-beeswax focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+      >
+        <option value="">{placeholder}</option>
+        {currentIsPending && (
+          <option value={currentCooperative.id} disabled>
+            {currentCooperative.name} (pending verification)
+          </option>
+        )}
+        {verifiedCooperatives.map((coop) => (
+          <option key={coop.id} value={coop.id}>
+            {coop.name}
+          </option>
+        ))}
+      </select>
+    );
+  };
 
   const roleSelect = (account) => (
     <select
@@ -240,11 +287,48 @@ export default function Admin() {
                         {coop.village}, {coop.county}
                       </p>
                     </div>
-                    <Badge variant="verified">Registered</Badge>
+                    <Badge variant={coop.isVerified ? 'verified' : 'pending'}>
+                      {coop.isVerified ? 'Verified' : 'Pending verification'}
+                    </Badge>
+                  </div>
+                  <div className="mb-4 grid gap-3 text-sm sm:grid-cols-2">
+                    <p>
+                      <span className="block text-xs text-dust">Ward</span>
+                      <span className="text-ivory">
+                        {coop.ward || 'Not provided'}
+                      </span>
+                    </p>
+                    <p>
+                      <span className="block text-xs text-dust">
+                        Consignment commission
+                      </span>
+                      <span className="text-ivory">
+                        {formatCommission(coop.commissionPercent)}
+                      </span>
+                    </p>
                   </div>
                   <MonoText className="block truncate text-xs">
                     {coop.walletAddress}
                   </MonoText>
+                  {coop.isVerified && formatDate(coop.verifiedAt) && (
+                    <p className="mt-2 text-xs text-dust">
+                      Verified {formatDate(coop.verifiedAt)}
+                    </p>
+                  )}
+                  {!coop.isVerified && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="mt-4"
+                      onClick={() => verifyMutation.mutate(coop.id)}
+                      disabled={verifyMutation.isPending}
+                    >
+                      {verifyMutation.isPending &&
+                      verifyMutation.variables === coop.id
+                        ? 'Verifying on-chain...'
+                        : 'Verify cooperative'}
+                    </Button>
+                  )}
                 </div>
 
                 <div className="border-t border-dust/10 bg-obsidian/35">
@@ -446,10 +530,12 @@ function CreateCooperativeModal({ isOpen, onClose }) {
   const [form, setForm] = useState({
     name: '',
     village: '',
+    ward: '',
     county: 'Baringo',
     walletAddress: '',
     registrationNumber: '',
     phone: '',
+    commissionPercent: '0',
   });
   const [error, setError] = useState('');
 
@@ -458,14 +544,16 @@ function CreateCooperativeModal({ isOpen, onClose }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cooperatives'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-      toast.success('Cooperative created and registered on-chain');
+      toast.success('Cooperative created for verification');
       setForm({
         name: '',
         village: '',
+        ward: '',
         county: 'Baringo',
         walletAddress: '',
         registrationNumber: '',
         phone: '',
+        commissionPercent: '0',
       });
       onClose();
     },
@@ -477,7 +565,21 @@ function CreateCooperativeModal({ isOpen, onClose }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     setError('');
-    mutation.mutate(form);
+    const commissionPercent = Number(form.commissionPercent);
+    if (
+      !Number.isFinite(commissionPercent) ||
+      commissionPercent < 0 ||
+      commissionPercent > 100
+    ) {
+      setError('Commission percent must be between 0 and 100');
+      return;
+    }
+
+    mutation.mutate({
+      ...form,
+      ward: form.ward.trim() || undefined,
+      commissionPercent,
+    });
   };
 
   const inputClass =
@@ -505,7 +607,7 @@ function CreateCooperativeModal({ isOpen, onClose }) {
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <label className={labelClass}>Village *</label>
             <input
@@ -518,12 +620,41 @@ function CreateCooperativeModal({ isOpen, onClose }) {
             />
           </div>
           <div>
+            <label className={labelClass}>Ward</label>
+            <input
+              type="text"
+              value={form.ward}
+              onChange={(e) => setForm({ ...form, ward: e.target.value })}
+              placeholder="Kabarnet"
+              maxLength="120"
+              className={inputClass}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
             <label className={labelClass}>County</label>
             <input
               type="text"
               value={form.county}
               onChange={(e) => setForm({ ...form, county: e.target.value })}
               className={inputClass}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Commission percent *</label>
+            <input
+              type="number"
+              value={form.commissionPercent}
+              onChange={(e) =>
+                setForm({ ...form, commissionPercent: e.target.value })
+              }
+              min="0"
+              max="100"
+              step="0.01"
+              className={inputClass}
+              required
             />
           </div>
         </div>
@@ -541,7 +672,8 @@ function CreateCooperativeModal({ isOpen, onClose }) {
             required
           />
           <p className="text-xs text-dust mt-1.5">
-            This wallet will be registered on the blockchain as a cooperative.
+            This wallet is granted the cooperative blockchain role only after an
+            administrator verifies the cooperative.
           </p>
         </div>
 
@@ -574,9 +706,9 @@ function CreateCooperativeModal({ isOpen, onClose }) {
             <strong className="text-ivory">On submit:</strong>
           </p>
           <ul className="space-y-1 list-disc list-inside">
-            <li>Cooperative wallet registered on blockchain</li>
-            <li>Saved to database</li>
-            <li>Available for user assignment</li>
+            <li>Cooperative is saved as pending verification</li>
+            <li>Commission is fixed for new consignment offers</li>
+            <li>Staff assignment waits until verification</li>
           </ul>
         </div>
 
@@ -595,17 +727,9 @@ function CreateCooperativeModal({ isOpen, onClose }) {
             disabled={mutation.isPending}
             className="flex-1"
           >
-            {mutation.isPending
-              ? 'Registering on-chain...'
-              : 'Create cooperative'}
+            {mutation.isPending ? 'Creating...' : 'Create cooperative'}
           </Button>
         </div>
-
-        {mutation.isPending && (
-          <p className="text-xs text-dust text-center">
-            This may take ~15 seconds (blockchain write).
-          </p>
-        )}
       </form>
     </Modal>
   );

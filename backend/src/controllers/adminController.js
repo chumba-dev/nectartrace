@@ -1,8 +1,26 @@
 const prisma = require('../config/db');
+const blockchain = require('../config/blockchain');
+const logger = require('../utils/logger');
+const { ethers } = require('ethers');
 
 function parsePositiveInteger(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseCommissionPercent(value) {
+  if (value === undefined) return 0;
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : null;
+}
+
+function parseOptionalWard(value) {
+  if (value === undefined || value === null || value === '') return { value: null };
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > 120) {
+    return { error: 'ward must be a non-empty string of at most 120 characters' };
+  }
+  return { value: value.trim() };
 }
 
 function rejectSelfManagement(req, res, userId, action) {
@@ -109,7 +127,7 @@ async function changeUserRole(req, res, next) {
     }
     if (rejectSelfManagement(req, res, userId, 'change the role of')) return;
 
-    const allowed = ['FARMER', 'COOPERATIVE_STAFF', 'BUYER', 'ADMIN'];
+    const allowed = ['FARMER', 'COOPERATIVE_STAFF', 'BUYER', 'CONSUMER'];
     if (!allowed.includes(role)) {
       return res.status(400).json({
         success: false,
@@ -159,10 +177,19 @@ async function toggleUserActive(req, res, next) {
 }
 
 // POST /api/admin/cooperatives
-// Create a cooperative AND register it on-chain in one step
+// Creation is intentionally off-chain until an administrator verifies the cooperative.
 async function createCooperative(req, res, next) {
   try {
-    const { name, village, county, walletAddress, registrationNumber, phone } = req.body;
+    const {
+      name,
+      village,
+      ward,
+      county,
+      walletAddress,
+      registrationNumber,
+      phone,
+      commissionPercent,
+    } = req.body;
 
     if (!name || !village || !walletAddress) {
       return res.status(400).json({
@@ -170,10 +197,28 @@ async function createCooperative(req, res, next) {
         message: 'name, village, and walletAddress are required',
       });
     }
+    if (!ethers.isAddress(walletAddress)) {
+      return res.status(400).json({
+        success: false,
+        message: 'walletAddress must be a valid blockchain address',
+      });
+    }
+    const normalizedWalletAddress = ethers.getAddress(walletAddress);
+    const parsedWard = parseOptionalWard(ward);
+    if (parsedWard.error) {
+      return res.status(400).json({ success: false, message: parsedWard.error });
+    }
+    const parsedCommissionPercent = parseCommissionPercent(commissionPercent);
+    if (parsedCommissionPercent === null) {
+      return res.status(400).json({
+        success: false,
+        message: 'commissionPercent must be between 0 and 100',
+      });
+    }
 
     // Check wallet isn't already used
     const existing = await prisma.cooperative.findUnique({
-      where: { walletAddress },
+      where: { walletAddress: normalizedWalletAddress },
     });
     if (existing) {
       return res.status(409).json({
@@ -182,38 +227,75 @@ async function createCooperative(req, res, next) {
       });
     }
 
-    // Register on-chain
-    const blockchain = require('../config/blockchain');
-    let blockchainTx;
-    try {
-      const contract = blockchain.getContract();
-      const tx = await contract.addCooperative(walletAddress);
-      const receipt = await tx.wait();
-      blockchainTx = receipt.hash;
-    } catch (err) {
-      return res.status(502).json({
-        success: false,
-        message: 'Failed to register cooperative on blockchain',
-        error: err.message,
-      });
-    }
-
     // Save to database
     const coop = await prisma.cooperative.create({
       data: {
         name,
         village,
+        ward: parsedWard.value,
         county: county || 'Baringo',
-        walletAddress,
+        walletAddress: normalizedWalletAddress,
         registrationNumber: registrationNumber || null,
         phone: phone || null,
+        commissionPercent: parsedCommissionPercent,
+        isVerified: false,
+        verifiedAt: null,
       },
     });
 
     res.status(201).json({
       success: true,
       data: coop,
-      blockchainTx,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// PUT /api/admin/cooperatives/:id/verify
+async function verifyCooperative(req, res, next) {
+  try {
+    const cooperativeId = parsePositiveInteger(req.params.id);
+    if (!cooperativeId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cooperative ID must be a positive integer',
+      });
+    }
+
+    const existing = await prisma.cooperative.findUnique({
+      where: { id: cooperativeId },
+      select: { id: true, walletAddress: true, isVerified: true, verifiedAt: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'Cooperative not found' });
+    }
+
+    let roleGrant;
+    try {
+      // Migrated verified rows may not yet have this role; re-verification reconciles them safely.
+      roleGrant = await blockchain.addCooperativeOnChain(existing.walletAddress);
+    } catch (err) {
+      logger.error('Cooperative blockchain role grant failed', { cooperativeId });
+      return res.status(502).json({
+        success: false,
+        message: 'Failed to grant the cooperative blockchain role',
+      });
+    }
+
+    const cooperative = await prisma.cooperative.update({
+      where: { id: cooperativeId },
+      data: {
+        isVerified: true,
+        verifiedAt: existing.verifiedAt || new Date(),
+      },
+    });
+
+    res.json({
+      success: true,
+      message: 'Cooperative verified',
+      data: cooperative,
+      blockchain: roleGrant,
     });
   } catch (err) {
     next(err);
@@ -257,5 +339,6 @@ module.exports = {
   changeUserRole,
   toggleUserActive,
   createCooperative,
+  verifyCooperative,
   getPlatformStats,
 };

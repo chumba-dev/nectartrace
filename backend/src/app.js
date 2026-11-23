@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const prisma = require('./config/db');
+const { getMongoConnectionStatus } = require('./config/mongo');
 const ussdRoutes = require('./routes/ussd');
 const adminRoutes = require('./routes/admin');
 
@@ -13,6 +14,7 @@ const listingRoutes = require('./routes/listings');
 const orderRoutes = require('./routes/orders');
 const priceRoutes = require('./routes/prices');
 const harvestOfferRoutes = require('./routes/harvestOffers');
+const paymentRoutes = require('./routes/payments');
 
 const app = express();
 
@@ -45,6 +47,7 @@ app.get('/api/health', async (req, res) => {
     environment: process.env.NODE_ENV,
     checks: {
       database: 'unknown',
+      mongodb: getMongoConnectionStatus(),
       blockchain: 'unknown',
     },
   };
@@ -55,6 +58,10 @@ app.get('/api/health', async (req, res) => {
     health.checks.database = 'ok';
   } catch (err) {
     health.checks.database = 'error';
+    health.status = 'degraded';
+  }
+
+  if (health.checks.mongodb !== 'connected') {
     health.status = 'degraded';
   }
 
@@ -88,6 +95,8 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/prices', priceRoutes);
 app.use('/api/ussd', ussdRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/offers', harvestOfferRoutes);
 app.use('/api/harvest-offers', harvestOfferRoutes);
 // ============================================
 // ERROR HANDLING

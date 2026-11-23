@@ -4,6 +4,19 @@ const MAX_DESCRIPTION_LENGTH = 2000;
 const MAX_HTTPS_IMAGE_URL_LENGTH = 2048;
 const MAX_DATA_IMAGE_BYTES = 2 * 1024 * 1024;
 const MAX_DATA_IMAGE_URL_LENGTH = Math.ceil(MAX_DATA_IMAGE_BYTES / 3) * 4 + 32;
+const publicCooperativeSelect = {
+  id: true,
+  name: true,
+  village: true,
+  ward: true,
+  county: true,
+  walletAddress: true,
+  registrationNumber: true,
+  phone: true,
+  isVerified: true,
+  createdAt: true,
+  updatedAt: true,
+};
 
 function hasOwn(object, key) {
   return Object.prototype.hasOwnProperty.call(object, key);
@@ -161,7 +174,7 @@ async function getListing(req, res, next) {
 
     const listing = await prisma.listing.findUnique({
       where: { id },
-      include: { batch: true, cooperative: true },
+      include: { batch: true, cooperative: { select: publicCooperativeSelect } },
     });
     if (!listing) return res.status(404).json({ success: false, message: 'Listing not found' });
     res.json({ success: true, data: listing });

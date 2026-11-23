@@ -4,6 +4,7 @@ import ScrollToTop from './components/ScrollToTop';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import RegisterRoleSelector from './pages/RegisterRoleSelector';
 import Marketplace from './pages/Marketplace';
 import Verify from './pages/Verify';
 import Dashboard from './pages/Dashboard';
@@ -22,10 +23,22 @@ function App() {
         <Route element={<Layout />}>
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register accountType="BUYER" />} />
+          <Route path="/register" element={<RegisterRoleSelector />} />
+          <Route
+            path="/register/buyer"
+            element={<Register accountType="BUYER" />}
+          />
           <Route
             path="/register/cooperative"
             element={<Register accountType="COOPERATIVE_STAFF" />}
+          />
+          <Route
+            path="/register/farmer"
+            element={<Register accountType="FARMER" />}
+          />
+          <Route
+            path="/register/consumer"
+            element={<Register accountType="CONSUMER" />}
           />
           <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/marketplace" element={<Marketplace />} />

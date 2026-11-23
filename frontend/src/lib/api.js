@@ -117,9 +117,29 @@ export const cooperativesApi = {
 };
 
 export const harvestOffersApi = {
-  list: () => api.get('/harvest-offers'),
+  list: (params) => api.get('/offers', { params }),
+  accept: (id, data) => api.put(`/offers/${id}/accept`, data),
+  reject: (id, data) => api.put(`/offers/${id}/reject`, data),
+  delivery: (id, data) => api.put(`/offers/${id}/delivery`, data),
+  recordDelivery: (id, data) => api.put(`/offers/${id}/delivery`, data),
+  verify: (id) => api.put(`/offers/${id}/verify`),
+  sold: (id, data) => api.put(`/offers/${id}/sold`, data),
+  markSold: (id, data) => api.put(`/offers/${id}/sold`, data),
+  // Deprecated endpoint aliases retained for older callers.
   updateStatus: (id, data) => api.put(`/harvest-offers/${id}/status`, data),
-  verify: (id, data) => api.post(`/harvest-offers/${id}/verify`, data),
   updateSettlement: (id, data) =>
     api.put(`/harvest-offers/${id}/settlement`, data),
+};
+
+export const offersApi = harvestOffersApi;
+
+const getOfferPayment = (offerId) => api.get(`/payments/offers/${offerId}`);
+const initiateOfferPayout = (offerId, data) =>
+  api.post(`/payments/offers/${offerId}/payout`, data);
+
+export const paymentsApi = {
+  list: getOfferPayment,
+  getForOffer: getOfferPayment,
+  initiate: initiateOfferPayout,
+  initiatePayout: initiateOfferPayout,
 };

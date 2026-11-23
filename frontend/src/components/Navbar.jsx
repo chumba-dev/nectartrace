@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import Button from './ui/Button';
 import { useAuth } from '../context/AuthContext';
 
 export default function Navbar() {
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
+  const isLanding = pathname === '/';
   const canViewOrders = ['BUYER', 'COOPERATIVE_STAFF', 'ADMIN'].includes(
     user?.role
   );
@@ -17,28 +19,53 @@ export default function Navbar() {
     setOpen(false);
   };
 
+  const closeMenu = () => setOpen(false);
   const navLinkClass = ({ isActive }) =>
-    `text-sm font-body transition-colors ${
-      isActive ? 'text-beeswax' : 'text-ivory hover:text-beeswax'
+    `text-sm font-medium transition-colors ${
+      isActive ? 'text-beeswax' : 'text-dust hover:text-ivory'
     }`;
+  const plainLinkClass =
+    'text-sm font-medium text-dust transition-colors hover:text-ivory';
 
   return (
-    <header className="sticky top-0 z-50 bg-obsidian/95 backdrop-blur-sm border-b border-dust/10">
-      <nav className="container-content flex items-center justify-between h-16 md:h-20">
-        <Link to="/" className="flex items-center gap-2 group">
-          <span className="w-2 h-2 rounded-full bg-beeswax group-hover:scale-125 transition-transform" />
-          <span className="font-display text-xl text-ivory tracking-tight">
-            NectarTrace
-          </span>
+    <header
+      className={`${isLanding ? 'fixed' : 'sticky'} inset-x-0 top-0 z-50 border-b border-white/[0.06] bg-obsidian/[0.88] backdrop-blur-[14px]`}
+    >
+      <nav
+        className={`${isLanding ? 'mx-auto max-w-[1140px] px-[clamp(1.25rem,5vw,3rem)]' : 'container-content'} flex h-[72px] items-center justify-between`}
+      >
+        <Link
+          to="/"
+          className="font-display text-xl font-bold tracking-tight text-ivory"
+          onClick={closeMenu}
+        >
+          Nectar<span className="text-beeswax">Trace</span>
         </Link>
 
-        <div className="hidden md:flex items-center gap-8">
-          <NavLink to="/marketplace" className={navLinkClass}>
-            Marketplace
-          </NavLink>
-          <NavLink to="/verify" className={navLinkClass}>
-            Verify
-          </NavLink>
+        <div className="hidden items-center gap-9 md:flex">
+          {isLanding ? (
+            <>
+              <a href="#how" className={plainLinkClass}>
+                How it works
+              </a>
+              <a href="#marketplace" className={plainLinkClass}>
+                Marketplace
+              </a>
+              <a href="#verify" className={plainLinkClass}>
+                Verify honey
+              </a>
+            </>
+          ) : (
+            <>
+              <NavLink to="/marketplace" className={navLinkClass}>
+                Marketplace
+              </NavLink>
+              <NavLink to="/verify" className={navLinkClass}>
+                Verify honey
+              </NavLink>
+            </>
+          )}
+
           {user?.role === 'COOPERATIVE_STAFF' && (
             <NavLink to="/dashboard" className={navLinkClass}>
               Dashboard
@@ -49,26 +76,6 @@ export default function Navbar() {
               Admin
             </NavLink>
           )}
-        </div>
-
-        <div className="hidden md:flex items-center gap-3">
-          {isAuthenticated ? (
-            <>
-              <span className="text-sm text-dust">{user.name}</span>
-              <Button variant="ghost" size="sm" onClick={handleLogout}>
-                Sign out
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button variant="ghost" size="sm" to="/login">
-                Sign in
-              </Button>
-              <Button size="sm" to="/register">
-                Create buyer account
-              </Button>
-            </>
-          )}
           {canViewOrders && (
             <NavLink to="/orders" className={navLinkClass}>
               Orders
@@ -76,10 +83,42 @@ export default function Navbar() {
           )}
         </div>
 
+        <div className="hidden items-center gap-3 md:flex">
+          {isAuthenticated ? (
+            <>
+              <span className="max-w-36 truncate text-sm text-dust">
+                {user.name}
+              </span>
+              <Button variant="ghost" size="sm" onClick={handleLogout}>
+                Sign out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                to="/login"
+                className="border-beeswax/50 hover:border-beeswax hover:bg-beeswax/10 hover:text-beeswax"
+              >
+                Sign in
+              </Button>
+              {!isLanding && (
+                <Button size="sm" to="/register/buyer">
+                  Join as buyer
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+
         <button
-          onClick={() => setOpen(!open)}
-          className="md:hidden p-2 text-ivory"
-          aria-label="Toggle menu"
+          type="button"
+          onClick={() => setOpen((current) => !current)}
+          className="rounded-md p-2 text-ivory md:hidden"
+          aria-label="Toggle navigation"
+          aria-expanded={open}
+          aria-controls="mobile-navigation"
         >
           <svg
             width="24"
@@ -88,6 +127,7 @@ export default function Navbar() {
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
+            aria-hidden="true"
           >
             {open ? (
               <>
@@ -106,53 +146,50 @@ export default function Navbar() {
       </nav>
 
       {open && (
-        <div className="md:hidden border-t border-dust/10 bg-obsidian">
-          <div className="container-content py-6 flex flex-col gap-4">
-            <NavLink
+        <div
+          id="mobile-navigation"
+          className="border-t border-white/[0.06] bg-obsidian md:hidden"
+        >
+          <div className="container-content flex flex-col gap-4 py-6">
+            {isLanding && (
+              <a href="#how" className={plainLinkClass} onClick={closeMenu}>
+                How it works
+              </a>
+            )}
+            <Link
               to="/marketplace"
-              className={navLinkClass}
-              onClick={() => setOpen(false)}
+              className={plainLinkClass}
+              onClick={closeMenu}
             >
               Marketplace
-            </NavLink>
-            <NavLink
-              to="/verify"
-              className={navLinkClass}
-              onClick={() => setOpen(false)}
-            >
-              Verify
-            </NavLink>
+            </Link>
+            <Link to="/verify" className={plainLinkClass} onClick={closeMenu}>
+              Verify honey
+            </Link>
             {user?.role === 'COOPERATIVE_STAFF' && (
-              <NavLink
+              <Link
                 to="/dashboard"
-                className={navLinkClass}
-                onClick={() => setOpen(false)}
+                className={plainLinkClass}
+                onClick={closeMenu}
               >
                 Dashboard
-              </NavLink>
+              </Link>
             )}
             {user?.role === 'ADMIN' && (
-              <NavLink
-                to="/admin"
-                className={navLinkClass}
-                onClick={() => setOpen(false)}
-              >
+              <Link to="/admin" className={plainLinkClass} onClick={closeMenu}>
                 Admin
-              </NavLink>
+              </Link>
             )}
             {canViewOrders && (
-              <NavLink
-                to="/orders"
-                className={navLinkClass}
-                onClick={() => setOpen(false)}
-              >
+              <Link to="/orders" className={plainLinkClass} onClick={closeMenu}>
                 Orders
-              </NavLink>
+              </Link>
             )}
-            <div className="flex gap-3 pt-4 border-t border-dust/10">
+
+            <div className="flex gap-3 border-t border-white/[0.06] pt-4">
               {isAuthenticated ? (
                 <>
-                  <p className="flex-1 text-sm text-dust self-center">
+                  <p className="flex-1 self-center truncate text-sm text-dust">
                     {user.name}
                   </p>
                   <Button variant="ghost" size="sm" onClick={handleLogout}>
@@ -162,14 +199,20 @@ export default function Navbar() {
               ) : (
                 <>
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     to="/login"
                     className="flex-1"
+                    onClick={closeMenu}
                   >
                     Sign in
                   </Button>
-                  <Button size="sm" to="/register" className="flex-1">
+                  <Button
+                    size="sm"
+                    to="/register/buyer"
+                    className="flex-1"
+                    onClick={closeMenu}
+                  >
                     Join as buyer
                   </Button>
                 </>

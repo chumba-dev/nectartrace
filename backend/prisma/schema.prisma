@@ -16,6 +16,7 @@ enum UserRole {
   COOPERATIVE_STAFF
   BUYER
   ADMIN
+  CONSUMER
 }
 
 enum BatchStatus {
@@ -55,15 +56,19 @@ enum SettlementStatus {
 // ============================================
 
 model Cooperative {
-  id                 Int      @id @default(autoincrement())
-  name               String   @unique
+  id                 Int       @id @default(autoincrement())
+  name               String    @unique
   village            String
-  county             String   @default("Baringo")
-  walletAddress      String   @unique
-  registrationNumber String?  @unique
+  ward               String?
+  county             String    @default("Baringo")
+  walletAddress      String    @unique
+  registrationNumber String?   @unique
   phone              String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  isVerified         Boolean   @default(false)
+  verifiedAt         DateTime?
+  commissionPercent  Float     @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   users             User[]
   batches           HoneyBatch[]
@@ -73,19 +78,24 @@ model Cooperative {
 }
 
 model User {
-  id              Int       @id @default(autoincrement())
-  name            String
-  phone           String    @unique
-  email           String?   @unique
-  passwordHash    String?
-  googleId        String?   @unique
-  emailVerifiedAt DateTime?
-  role            UserRole  @default(FARMER)
-  cooperativeId   Int?
-  walletAddress   String?
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id               Int       @id @default(autoincrement())
+  name             String
+  phone            String    @unique
+  email            String?   @unique
+  passwordHash     String?
+  googleId         String?   @unique
+  emailVerifiedAt  DateTime?
+  role             UserRole  @default(FARMER)
+  cooperativeId    Int?
+  walletAddress    String?
+  ward             String?
+  dataConsentAt    DateTime?
+  ussdPinHash      String?
+  farmerVerifiedAt DateTime?
+  mpesaNumber      String?
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   cooperative            Cooperative?            @relation(fields: [cooperativeId], references: [id])
   orders                 Order[]                 @relation("BuyerOrders")
@@ -107,6 +117,7 @@ model HoneyBatch {
   weightKg         Float
   pricePerKg       Float?
   blockchainTxHash String?     @unique
+  lotIdsHash       String?     @unique
   qrCodeUrl        String?
   status           BatchStatus @default(AVAILABLE)
   createdByUserId  Int?
@@ -241,12 +252,13 @@ model PriceHistory {
 // ============================================
 
 model HarvestLog {
-  id        Int      @id @default(autoincrement())
-  userId    Int
-  weightKg  Float
-  loggedVia String   @default("USSD")
-  notes     String?
-  createdAt DateTime @default(now())
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  weightKg      Float
+  loggedVia     String   @default("USSD")
+  ussdSessionId String?  @unique
+  notes         String?
+  createdAt     DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
 

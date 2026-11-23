@@ -1,5 +1,11 @@
 require('dotenv').config();
 
+const parsedOfferExpiryInterval = Number(process.env.OFFER_EXPIRY_INTERVAL_MS);
+const offerExpiryIntervalMs = Number.isFinite(parsedOfferExpiryInterval)
+  && parsedOfferExpiryInterval >= 1000
+  ? parsedOfferExpiryInterval
+  : 60 * 1000;
+
 module.exports = {
   port: process.env.PORT || 5000,
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -8,9 +14,23 @@ module.exports = {
     url: process.env.DATABASE_URL,
   },
 
+  mongodb: {
+    uri: process.env.MONGODB_URI,
+  },
+
+  offers: {
+    expiryIntervalMs: offerExpiryIntervalMs,
+  },
+
   jwt: {
     secret: process.env.JWT_SECRET,
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+  },
+
+  ussd: {
+    eventSecret: process.env.USSD_EVENT_SECRET
+      || process.env.JWT_SECRET
+      || (process.env.NODE_ENV === 'production' ? undefined : 'development-only-ussd-secret'),
   },
 
   africasTalking: {
@@ -18,6 +38,17 @@ module.exports = {
     username: process.env.AT_USERNAME || 'sandbox',
     shortcode: process.env.AT_SHORTCODE || '*483#',
     senderId: process.env.AT_SENDER_ID || '',
+  },
+
+  daraja: {
+    baseUrl: process.env.DARAJA_BASE_URL || 'https://sandbox.safaricom.co.ke',
+    consumerKey: process.env.DARAJA_CONSUMER_KEY,
+    consumerSecret: process.env.DARAJA_CONSUMER_SECRET,
+    shortcode: process.env.DARAJA_B2C_SHORTCODE,
+    initiatorName: process.env.DARAJA_B2C_INITIATOR_NAME,
+    securityCredential: process.env.DARAJA_B2C_SECURITY_CREDENTIAL,
+    resultUrl: process.env.DARAJA_B2C_RESULT_URL,
+    timeoutUrl: process.env.DARAJA_B2C_TIMEOUT_URL,
   },
 
   blockchain: {

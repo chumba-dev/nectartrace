@@ -1,494 +1,342 @@
-const prisma = require('../config/db');
-const blockchain = require('../config/blockchain');
 const logger = require('../utils/logger');
-const { validateBatchInput } = require('../utils/batchValidation');
+const offerService = require('../services/offerService');
+const paymentService = require('../services/paymentService');
+const smsService = require('../services/smsService');
 
-const offerInclude = {
-  farmer: {
-    select: { id: true, name: true, phone: true, email: true },
-  },
-  cooperative: true,
-  batch: true,
-  settlement: true,
-};
-
-function parsePositiveInteger(value) {
-  if (typeof value === 'number') {
-    return Number.isSafeInteger(value) && value > 0 ? value : null;
+function parsePositiveInteger(value, name) {
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') {
+    throw new offerService.OfferServiceError(400, `${name} must be a positive integer`, 'INVALID_PARAMETER');
   }
-  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) return null;
-
   const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : null;
-}
-
-function canManageOffer(user, offer) {
-  return user.role === 'ADMIN'
-    || (Boolean(user.cooperativeId) && user.cooperativeId === offer.cooperativeId);
-}
-
-function parseFiniteNumber(value) {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  if (typeof value !== 'string' || !value.trim()) return null;
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseNonnegativeMoney(value) {
-  const parsed = parseFiniteNumber(value);
-  return parsed !== null && parsed >= 0 ? parsed : null;
-}
-
-function roundMoney(value) {
-  return Math.round((value + Number.EPSILON) * 100) / 100;
-}
-
-async function getDeliveredSales(offer) {
-  if (!offer.honeyBatchId) {
-    return { deliveredSalesAmount: 0, deliveredSalesQuantityKg: 0 };
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new offerService.OfferServiceError(400, `${name} must be a positive integer`, 'INVALID_PARAMETER');
   }
+  return parsed;
+}
 
-  const result = await prisma.order.aggregate({
-    where: {
-      status: 'DELIVERED',
-      listing: { batchId: offer.honeyBatchId },
-    },
-    _sum: { totalPrice: true, quantityKg: true },
-  });
+function parseOptionalNumber(value) {
+  if (value === undefined || value === null) return undefined;
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === '') return NaN;
+  return Number(value);
+}
 
+function parseOfferIdentifier(value) {
+  const identifier = typeof value === 'string' ? value.trim() : '';
+  if (!identifier || identifier.length > 80) {
+    throw new offerService.OfferServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
+  }
+  return identifier;
+}
+
+function parseStatus(value) {
+  if (value === undefined) return undefined;
+  if (!offerService.OFFER_STATUSES.includes(value)) {
+    throw new offerService.OfferServiceError(
+      400,
+      `status must be one of: ${offerService.OFFER_STATUSES.join(', ')}`,
+      'INVALID_OFFER_STATUS'
+    );
+  }
+  return value;
+}
+
+function parsePagination(query) {
+  const page = query.page === undefined ? 1 : parsePositiveInteger(query.page, 'page');
+  const limit = query.limit === undefined ? 20 : parsePositiveInteger(query.limit, 'limit');
+  if (limit > 100) {
+    throw new offerService.OfferServiceError(400, 'limit must not exceed 100', 'INVALID_PARAMETER');
+  }
+  return { page, limit };
+}
+
+function pagination(page, limit, total) {
   return {
-    deliveredSalesAmount: roundMoney(result._sum.totalPrice || 0),
-    deliveredSalesQuantityKg: result._sum.quantityKg || 0,
+    page,
+    limit,
+    total,
+    totalPages: total === 0 ? 0 : Math.ceil(total / limit),
   };
 }
 
-async function withDeliveredSales(offer) {
-  if (!offer || offer.settlementType !== 'CONSIGNMENT') return offer;
-  return { ...offer, ...(await getDeliveredSales(offer)) };
+function handleControllerError(err, res, next) {
+  if (err instanceof paymentService.PaymentServiceError) {
+    return res.status(err.status).json({
+      success: false,
+      message: err.message,
+      code: err.code,
+      ...(err.payment && { data: { payment: err.payment } }),
+    });
+  }
+  if (err instanceof offerService.OfferServiceError) {
+    return res.status(err.status).json({
+      success: false,
+      message: err.message,
+      code: err.code,
+    });
+  }
+  if (err?.name === 'ValidationError' || err?.name === 'CastError') {
+    return res.status(400).json({ success: false, message: 'Invalid offer data' });
+  }
+  if (err?.code === 11000) {
+    return res.status(409).json({ success: false, message: 'Offer already exists' });
+  }
+  return next(err);
+}
+
+async function enrichManagedOffer(offer) {
+  const [enriched] = await offerService.enrichOffers([offer], { includeFarmer: true });
+  return enriched;
+}
+
+async function requireSmsRecipient(offer) {
+  const enriched = await enrichManagedOffer(offer);
+  if (!enriched.farmer?.phone) {
+    throw new offerService.OfferServiceError(
+      409,
+      'The farmer has no SMS phone number',
+      'FARMER_PHONE_REQUIRED'
+    );
+  }
+  return enriched.farmer.phone;
+}
+
+async function sendStatusSms(send, offer, status) {
+  try {
+    await send();
+  } catch (err) {
+    logger.warn('Offer status SMS failed', { offerId: offer.id, status });
+  }
 }
 
 async function listOffers(req, res, next) {
   try {
-    const where = {};
-    if (req.user.role === 'COOPERATIVE_STAFF') {
-      if (!req.user.cooperativeId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Your account is not linked to a cooperative',
-          code: 'NO_COOPERATIVE',
-        });
-      }
-      where.cooperativeId = req.user.cooperativeId;
-    } else if (req.query.cooperativeId !== undefined) {
-      const cooperativeId = parsePositiveInteger(req.query.cooperativeId);
-      if (!cooperativeId) {
-        return res.status(400).json({
-          success: false,
-          message: 'cooperativeId must be a positive integer',
-        });
-      }
-      where.cooperativeId = cooperativeId;
-    }
-
-    const offers = await prisma.harvestOffer.findMany({
-      where,
-      include: offerInclude,
-      orderBy: { createdAt: 'desc' },
+    const cooperativeId = req.query.cooperativeId === undefined
+      ? undefined
+      : parsePositiveInteger(req.query.cooperativeId, 'cooperativeId');
+    const status = parseStatus(req.query.status);
+    const { page, limit } = parsePagination(req.query);
+    const result = await offerService.listIncomingOffers({
+      user: req.user,
+      cooperativeId,
+      status,
+      page,
+      limit,
     });
 
-    const offersWithSales = await Promise.all(offers.map(withDeliveredSales));
-    res.json({ success: true, data: offersWithSales, count: offersWithSales.length });
+    return res.json({
+      success: true,
+      data: result.offers,
+      count: result.offers.length,
+      pagination: pagination(page, limit, result.total),
+    });
   } catch (err) {
-    next(err);
+    return handleControllerError(err, res, next);
   }
 }
 
 async function listMyOffers(req, res, next) {
   try {
-    const offers = await prisma.harvestOffer.findMany({
-      where: { farmerId: req.user.id },
-      include: offerInclude,
-      orderBy: { createdAt: 'desc' },
+    const status = parseStatus(req.query.status);
+    const { page, limit } = parsePagination(req.query);
+    const result = await offerService.listFarmerOffers({
+      farmerId: req.user.id,
+      status,
+      page,
+      limit,
     });
 
-    const offersWithSales = await Promise.all(offers.map(withDeliveredSales));
-    res.json({ success: true, data: offersWithSales, count: offersWithSales.length });
+    return res.json({
+      success: true,
+      data: result.offers,
+      count: result.offers.length,
+      pagination: pagination(page, limit, result.total),
+    });
   } catch (err) {
-    next(err);
+    return handleControllerError(err, res, next);
   }
 }
 
-async function updateOfferStatus(req, res, next) {
+async function getMyOffer(req, res, next) {
   try {
-    const offerId = parsePositiveInteger(req.params.id);
-    if (!offerId) {
-      return res.status(400).json({ success: false, message: 'Offer ID must be a positive integer' });
-    }
+    const identifier = parseOfferIdentifier(req.params.id);
+    const offer = await offerService.getFarmerOffer(identifier, req.user.id);
+    return res.json({ success: true, data: offer });
+  } catch (err) {
+    return handleControllerError(err, res, next);
+  }
+}
 
-    const { status } = req.body;
-    if (!['ACCEPTED', 'REJECTED', 'RECEIVED'].includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'status must be ACCEPTED, REJECTED, or RECEIVED',
-      });
-    }
+async function acceptOffer(req, res, next) {
+  try {
+    const identifier = parseOfferIdentifier(req.params.id);
+    const { offer } = await offerService.loadManagedOffer(identifier, req.user);
+    const phone = await requireSmsRecipient(offer);
+    const agreedPricePerKg = parseOptionalNumber(req.body.agreedPricePerKg);
+    const updated = await offerService.acceptOffer(offer, agreedPricePerKg);
+    const enriched = await enrichManagedOffer(updated);
 
-    const offer = await prisma.harvestOffer.findUnique({
-      where: { id: offerId },
-      include: offerInclude,
-    });
-    if (!offer) {
-      return res.status(404).json({ success: false, message: 'Harvest offer not found' });
-    }
-    if (!canManageOffer(req.user, offer)) {
-      return res.status(403).json({
-        success: false,
-        message: 'You can only manage offers for your cooperative',
-      });
-    }
+    await sendStatusSms(
+      () => smsService.sendOfferAccepted(phone, {
+        reference: updated.reference,
+        tradeType: updated.tradeType,
+        agreedPricePerKg: updated.agreedPricePerKg,
+        commissionPercent: updated.commissionPercent,
+      }),
+      enriched,
+      'accepted'
+    );
 
-    const allowedTransitions = {
-      SUBMITTED: ['ACCEPTED', 'REJECTED'],
-      ACCEPTED: ['RECEIVED', 'REJECTED'],
-    };
-    if (!allowedTransitions[offer.status]?.includes(status)) {
-      return res.status(409).json({
-        success: false,
-        message: `Cannot change an offer from ${offer.status} to ${status}`,
-      });
-    }
-
-    const data = { status };
-    if (status === 'ACCEPTED') {
-      const acceptedWeightKg = parseFiniteNumber(req.body.acceptedWeightKg);
-      const agreedPricePerKg = parseFiniteNumber(req.body.agreedPricePerKg);
-      if (
-        acceptedWeightKg === null
-        || acceptedWeightKg <= 0
-        || agreedPricePerKg === null
-        || agreedPricePerKg <= 0
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: 'acceptedWeightKg and agreedPricePerKg must be positive numbers',
-        });
-      }
-      data.acceptedWeightKg = acceptedWeightKg;
-      data.agreedPricePerKg = agreedPricePerKg;
-      data.rejectionReason = null;
-    }
-
-    if (status === 'REJECTED') {
-      const rejectionReason = typeof req.body.rejectionReason === 'string'
-        ? req.body.rejectionReason.trim()
-        : '';
-      if (!rejectionReason || rejectionReason.length > 500) {
-        return res.status(400).json({
-          success: false,
-          message: 'rejectionReason is required and must not exceed 500 characters',
-        });
-      }
-      data.rejectionReason = rejectionReason;
-    }
-
-    const result = await prisma.harvestOffer.updateMany({
-      where: { id: offerId, status: offer.status },
-      data,
-    });
-    if (result.count !== 1) {
-      return res.status(409).json({
-        success: false,
-        message: 'Offer status changed before this request completed',
-      });
-    }
-
-    const updatedOffer = await prisma.harvestOffer.findUnique({
-      where: { id: offerId },
-      include: offerInclude,
-    });
-    res.json({
+    return res.json({
       success: true,
-      message: 'Harvest offer status updated',
-      data: await withDeliveredSales(updatedOffer),
+      message: 'Offer accepted',
+      data: enriched,
     });
   } catch (err) {
-    next(err);
+    return handleControllerError(err, res, next);
+  }
+}
+
+async function rejectOffer(req, res, next) {
+  try {
+    const identifier = parseOfferIdentifier(req.params.id);
+    const { offer } = await offerService.loadManagedOffer(identifier, req.user);
+    const phone = await requireSmsRecipient(offer);
+    const rejectionReason = req.body.reason ?? req.body.rejectionReason;
+    const updated = await offerService.rejectOffer(offer, rejectionReason);
+    const enriched = await enrichManagedOffer(updated);
+
+    await sendStatusSms(
+      () => smsService.sendOfferRejected(phone, {
+        reference: updated.reference,
+        rejectionReason: updated.rejectionReason,
+      }),
+      enriched,
+      'rejected'
+    );
+
+    return res.json({
+      success: true,
+      message: 'Offer rejected',
+      data: enriched,
+    });
+  } catch (err) {
+    return handleControllerError(err, res, next);
+  }
+}
+
+async function recordDelivery(req, res, next) {
+  try {
+    const identifier = parseOfferIdentifier(req.params.id);
+    const { offer } = await offerService.loadManagedOffer(identifier, req.user);
+    const updated = await offerService.recordDelivery(offer, {
+      weighedKg: parseOptionalNumber(req.body.weighedKg),
+      moisturePercent: parseOptionalNumber(req.body.moisturePercent),
+    });
+    const enriched = await enrichManagedOffer(updated);
+
+    return res.json({
+      success: true,
+      message: 'Offer delivery recorded',
+      data: enriched,
+    });
+  } catch (err) {
+    return handleControllerError(err, res, next);
   }
 }
 
 async function verifyOffer(req, res, next) {
   try {
-    const offerId = parsePositiveInteger(req.params.id);
-    if (!offerId) {
-      return res.status(400).json({ success: false, message: 'Offer ID must be a positive integer' });
-    }
+    const identifier = parseOfferIdentifier(req.params.id);
+    const { offer } = await offerService.loadManagedOffer(identifier, req.user);
+    const updated = await offerService.verifyOffer(offer);
+    const enriched = await enrichManagedOffer(updated);
 
-    const offer = await prisma.harvestOffer.findUnique({
-      where: { id: offerId },
-      include: offerInclude,
-    });
-    if (!offer) {
-      return res.status(404).json({ success: false, message: 'Harvest offer not found' });
-    }
-    if (!canManageOffer(req.user, offer)) {
-      return res.status(403).json({
-        success: false,
-        message: 'You can only manage offers for your cooperative',
-      });
-    }
-    if (offer.status !== 'RECEIVED') {
-      return res.status(409).json({
-        success: false,
-        message: 'Only received offers can be verified',
-      });
-    }
-
-    const validation = validateBatchInput(req.body);
-    if (validation.error) {
-      return res.status(400).json({ success: false, message: validation.error });
-    }
-    const batchInput = validation.value;
-
-    const existingBatch = await prisma.honeyBatch.findUnique({
-      where: { batchId: batchInput.batchId },
-    });
-    if (existingBatch) {
-      return res.status(409).json({ success: false, message: 'Batch ID already exists' });
-    }
-
-    let blockchainResult;
-    try {
-      blockchainResult = await blockchain.recordBatchOnChain({
-        batchId: batchInput.batchId,
-        village: batchInput.village,
-        cooperativeName: offer.cooperative.name,
-        moisturePercent: batchInput.moisturePercent,
-        weightKg: batchInput.weightKg,
-        harvestDate: batchInput.harvestDateText,
-      });
-    } catch (err) {
-      logger.error('Offer verification blockchain write failed', {
-        offerId,
-        batchId: batchInput.batchId,
-      });
-      return res.status(502).json({
-        success: false,
-        message: 'Failed to record batch on blockchain',
-      });
-    }
-
-    let verifiedOffer;
-    try {
-      verifiedOffer = await prisma.harvestOffer.update({
-        where: { id: offerId, status: 'RECEIVED', honeyBatchId: null },
-        data: {
-          status: 'VERIFIED',
-          batch: {
-            create: {
-              batchId: batchInput.batchId,
-              cooperative: { connect: { id: offer.cooperativeId } },
-              village: batchInput.village,
-              harvestDate: batchInput.harvestDate,
-              moistureContent: batchInput.moisturePercent,
-              weightKg: batchInput.weightKg,
-              pricePerKg: batchInput.pricePerKg,
-              blockchainTxHash: blockchainResult.txHash,
-              createdByUserId: req.user.id,
-            },
-          },
-        },
-        include: offerInclude,
-      });
-    } catch (err) {
-      if (err.code === 'P2002') {
-        return res.status(409).json({ success: false, message: 'Batch ID or transaction already exists' });
-      }
-      if (err.code === 'P2025') {
-        return res.status(409).json({
-          success: false,
-          message: 'Offer status changed before verification completed',
-        });
-      }
-      throw err;
-    }
-
-    res.status(201).json({
+    return res.json({
       success: true,
-      message: 'Harvest offer verified and batch recorded',
+      message: 'Offer verified',
+      data: enriched,
+    });
+  } catch (err) {
+    return handleControllerError(err, res, next);
+  }
+}
+
+async function recordConsignmentSale(req, res, next) {
+  try {
+    const identifier = parseOfferIdentifier(req.params.id);
+    const result = await paymentService.recordConsignmentSaleAndPayout({
+      offerIdentifier: identifier,
+      user: req.user,
+      saleAmount: req.body.saleAmount,
+      reference: req.body.reference,
+    });
+    return res.json({
+      success: true,
+      message: result.idempotent
+        ? 'Consignment sale payout already exists'
+        : 'Consignment sale recorded and payout submitted',
       data: {
-        offer: verifiedOffer,
-        batch: verifiedOffer.batch,
-        blockchain: blockchainResult,
+        saleAmount: result.amounts.grossAmount,
+        commissionAmount: result.amounts.commissionAmount,
+        payoutAmount: result.amounts.payoutAmount,
+        payment: result.payment,
       },
     });
   } catch (err) {
-    next(err);
+    return handleControllerError(err, res, next);
   }
 }
 
-async function upsertSettlement(req, res, next) {
+async function verifyFarmer(req, res, next) {
   try {
-    const offerId = parsePositiveInteger(req.params.id);
-    if (!offerId) {
-      return res.status(400).json({ success: false, message: 'Offer ID must be a positive integer' });
-    }
-
-    const offer = await prisma.harvestOffer.findUnique({
-      where: { id: offerId },
-      include: offerInclude,
-    });
-    if (!offer) {
-      return res.status(404).json({ success: false, message: 'Harvest offer not found' });
-    }
-    if (!canManageOffer(req.user, offer)) {
-      return res.status(403).json({
-        success: false,
-        message: 'You can only manage offers for your cooperative',
-      });
-    }
-
-    const directPurchaseStates = ['ACCEPTED', 'RECEIVED', 'VERIFIED'];
-    const canSettle = offer.settlementType === 'DIRECT_PURCHASE'
-      ? directPurchaseStates.includes(offer.status)
-      : offer.status === 'VERIFIED';
-    if (!canSettle) {
-      return res.status(409).json({
-        success: false,
-        message: offer.settlementType === 'CONSIGNMENT'
-          ? 'Consignment settlement can only begin after verification'
-          : 'Direct-purchase settlement can only begin after acceptance',
-      });
-    }
-
-    let grossAmount;
-    if (offer.settlementType === 'CONSIGNMENT') {
-      const deliveredSales = await getDeliveredSales(offer);
-      if (deliveredSales.deliveredSalesAmount <= 0) {
-        return res.status(409).json({
-          success: false,
-          message: 'Consignment settlement requires at least one delivered marketplace order',
-        });
-      }
-      grossAmount = deliveredSales.deliveredSalesAmount;
-      if (req.body.grossAmount !== undefined) {
-        const requestedGross = parseNonnegativeMoney(req.body.grossAmount);
-        if (requestedGross === null || Math.abs(requestedGross - grossAmount) > 0.009) {
-          return res.status(400).json({
-            success: false,
-            message: 'grossAmount must match delivered marketplace sales',
-          });
-        }
-      }
-    } else {
-      grossAmount = roundMoney(
-        Number(offer.acceptedWeightKg) * Number(offer.agreedPricePerKg)
+    const farmerId = parsePositiveInteger(req.params.farmerId, 'farmerId');
+    const cooperativeId = req.user.role === 'COOPERATIVE_STAFF'
+      ? req.user.cooperativeId
+      : parsePositiveInteger(
+        req.body.cooperativeId ?? req.query.cooperativeId,
+        'cooperativeId'
       );
-      if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
-        return res.status(409).json({
-          success: false,
-          message: 'Direct-purchase settlement requires accepted weight and agreed price',
-        });
-      }
-      if (req.body.grossAmount !== undefined) {
-        const requestedGross = parseNonnegativeMoney(req.body.grossAmount);
-        if (requestedGross === null || Math.abs(requestedGross - grossAmount) > 0.009) {
-          return res.status(400).json({
-            success: false,
-            message: 'grossAmount must match the accepted weight and agreed price',
-          });
-        }
-      }
-    }
-
-    const commissionSource = req.body.commissionAmount ?? offer.settlement?.commissionAmount ?? 0;
-    const paidSource = req.body.amountPaid ?? offer.settlement?.amountPaid ?? 0;
-    const commissionAmount = parseNonnegativeMoney(commissionSource);
-    const amountPaid = parseNonnegativeMoney(paidSource);
-
-    if (commissionAmount === null || amountPaid === null) {
-      return res.status(400).json({
-        success: false,
-        message: 'commissionAmount and amountPaid must be nonnegative finite numbers',
-      });
-    }
-    if (commissionAmount > grossAmount) {
-      return res.status(400).json({
-        success: false,
-        message: 'commissionAmount cannot exceed grossAmount',
-      });
-    }
-    if (offer.settlementType === 'DIRECT_PURCHASE' && commissionAmount !== 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Direct-purchase settlements cannot deduct a commission',
-      });
-    }
-
-    const netAmount = roundMoney(grossAmount - commissionAmount);
-    if (amountPaid - netAmount > 0.009) {
-      return res.status(400).json({
-        success: false,
-        message: 'amountPaid cannot exceed netAmount',
-      });
-    }
-
-    const paymentReference = req.body.paymentReference === undefined
-      ? offer.settlement?.paymentReference ?? null
-      : typeof req.body.paymentReference === 'string'
-        ? req.body.paymentReference.trim() || null
-        : undefined;
-    if (paymentReference === undefined || (paymentReference && paymentReference.length > 120)) {
-      return res.status(400).json({
-        success: false,
-        message: 'paymentReference must be a string of at most 120 characters',
-      });
-    }
-
-    const normalizedAmountPaid = roundMoney(amountPaid);
-    const status = Math.abs(normalizedAmountPaid - netAmount) <= 0.009
-      ? 'PAID'
-      : normalizedAmountPaid > 0
-        ? 'PARTIALLY_PAID'
-        : 'PENDING';
-    const paidAt = status === 'PAID' ? offer.settlement?.paidAt ?? new Date() : null;
-    const settlementData = {
-      farmerId: offer.farmerId,
-      cooperativeId: offer.cooperativeId,
-      type: offer.settlementType,
-      grossAmount,
-      commissionAmount,
-      netAmount,
-      amountPaid: normalizedAmountPaid,
-      status,
-      paymentReference,
-      paidAt,
-    };
-
-    await prisma.farmerSettlement.upsert({
-      where: { offerId },
-      create: { offerId, ...settlementData },
-      update: settlementData,
-    });
-
-    const updatedOffer = await prisma.harvestOffer.findUnique({
-      where: { id: offerId },
-      include: offerInclude,
-    });
-    res.json({
+    const farmer = await offerService.verifyFarmer({ cooperativeId, farmerId });
+    return res.json({
       success: true,
-      message: 'Farmer settlement saved',
-      data: await withDeliveredSales(updatedOffer),
+      message: 'Farmer verified',
+      data: { farmer },
     });
   } catch (err) {
-    next(err);
+    return handleControllerError(err, res, next);
   }
+}
+
+// Deprecated compatibility adapter. New clients must use the explicit lifecycle endpoints.
+async function updateOfferStatus(req, res, next) {
+  const status = req.body.status;
+  if (status === 'ACCEPTED') return acceptOffer(req, res, next);
+  if (status === 'REJECTED') return rejectOffer(req, res, next);
+  if (status === 'RECEIVED') {
+    req.body = {
+      ...req.body,
+      weighedKg: req.body.weighedKg ?? req.body.weightKg ?? req.body.acceptedWeightKg,
+    };
+    return recordDelivery(req, res, next);
+  }
+  if (status === 'VERIFIED') return verifyOffer(req, res, next);
+
+  return res.status(400).json({
+    success: false,
+    message: 'status must be ACCEPTED, REJECTED, RECEIVED, or VERIFIED',
+    code: 'INVALID_OFFER_STATUS',
+  });
 }
 
 module.exports = {
-  listOffers,
+  acceptOffer,
+  getMyOffer,
   listMyOffers,
+  listOffers,
+  recordConsignmentSale,
+  recordDelivery,
+  rejectOffer,
   updateOfferStatus,
+  verifyFarmer,
   verifyOffer,
-  upsertSettlement,
 };

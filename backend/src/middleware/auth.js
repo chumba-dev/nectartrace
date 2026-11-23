@@ -63,4 +63,45 @@ function authorize(...roles) {
   };
 }
 
-module.exports = { authenticate, authorize };
+async function requireVerifiedCooperative(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authenticated',
+      });
+    }
+
+    if (req.user.role === 'ADMIN') return next();
+
+    if (
+      req.user.role !== 'COOPERATIVE_STAFF'
+      || req.user.isActive === false
+      || !req.user.cooperativeId
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'A verified cooperative assignment is required',
+        code: 'COOPERATIVE_NOT_VERIFIED',
+      });
+    }
+
+    const cooperative = await prisma.cooperative.findUnique({
+      where: { id: req.user.cooperativeId },
+      select: { id: true, isVerified: true },
+    });
+    if (!cooperative?.isVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'A verified cooperative assignment is required',
+        code: 'COOPERATIVE_NOT_VERIFIED',
+      });
+    }
+
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { authenticate, authorize, requireVerifiedCooperative };

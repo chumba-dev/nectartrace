@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
+import AuthShell from '../components/AuthShell';
 import Button from '../components/ui/Button';
-import Card from '../components/ui/Card';
 import { authApi } from '../lib/api';
 
 function StateIcon({ kind }) {
@@ -24,7 +24,10 @@ function StateIcon({ kind }) {
 
   if (kind === 'loading') {
     return (
-      <span className="block h-7 w-7 animate-spin rounded-full border-2 border-beeswax/30 border-t-beeswax" />
+      <span
+        className="block h-7 w-7 animate-spin rounded-full border-2 border-beeswax/30 border-t-beeswax"
+        aria-hidden="true"
+      />
     );
   }
 
@@ -88,7 +91,8 @@ export default function VerifyEmail() {
 
   if (!token) {
     title = 'Verification link missing';
-    description = 'Open the complete link from your verification email.';
+    description =
+      'Open the complete link from your verification email, or request a fresh one below.';
   } else if (verification.isPending) {
     kind = 'loading';
     eyebrow = 'One moment';
@@ -101,6 +105,11 @@ export default function VerifyEmail() {
     description =
       verification.data?.message ||
       'Your email has been verified. You can now sign in.';
+  } else if (alreadyVerified) {
+    kind = 'success';
+    eyebrow = 'Already confirmed';
+    title = 'Your email is already verified';
+    description = 'No further confirmation is needed. Continue to sign in.';
   } else if (expired) {
     eyebrow = 'Link expired';
     title = 'Request a fresh verification link';
@@ -108,50 +117,80 @@ export default function VerifyEmail() {
       'This link is no longer valid. Enter your email address or phone number below.';
   }
 
-  const showResend = Boolean(token) && verification.isError && !alreadyVerified;
+  const showResend = (!token || verification.isError) && !alreadyVerified;
+  const iconClass =
+    kind === 'success'
+      ? 'border-sage/50 bg-sage/15 text-sage'
+      : kind === 'loading'
+        ? 'border-beeswax/30 bg-beeswax/10 text-beeswax'
+        : 'border-red-500/30 bg-red-500/10 text-red-300';
 
   return (
-    <div className="mx-auto flex min-h-[70vh] w-full max-w-md items-center px-4 py-20 sm:py-24">
-      <Card className="w-full p-5 text-center sm:p-8">
+    <AuthShell
+      eyebrow="Email verification"
+      title="Confirm the address behind your account"
+      description="Verification protects account access before any password registration can sign in."
+      quote="Clear provenance starts with a verified identity at every point in the chain."
+      quoteMeta="Identity check · Secure access"
+      imageAlt="Golden honey, honeycomb, and wooden honey dippers"
+      steps={['Account created', 'Email link', 'Secure access']}
+      currentStep={verification.isSuccess || alreadyVerified ? 3 : 2}
+    >
+      <section
+        className="rounded-xl border border-dust/15 bg-stone-deep p-5 text-center sm:p-8"
+        aria-live="polite"
+        aria-busy={kind === 'loading'}
+      >
         <div
-          className={`${kind === 'success' ? 'border-sage/40 bg-sage/15 text-sage' : kind === 'loading' ? 'border-beeswax/30 bg-beeswax/10 text-beeswax' : 'border-red-500/30 bg-red-500/10 text-red-300'} mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-full border`}
+          className={`${iconClass} mx-auto flex h-14 w-14 items-center justify-center rounded-full border`}
         >
           <StateIcon kind={kind} />
         </div>
-        <p className="mb-2 font-mono text-xs uppercase tracking-widest text-beeswax">
+        <p className="mb-2 mt-5 font-mono text-[0.68rem] uppercase tracking-[0.18em] text-beeswax">
           {eyebrow}
         </p>
-        <h1 className="font-display text-3xl text-ivory">{title}</h1>
-        <p className="mt-4 text-sm leading-6 text-dust">{description}</p>
+        <h2 className="font-display text-2xl font-bold text-ivory">{title}</h2>
+        <p className="mt-3 text-sm leading-6 text-dust">{description}</p>
 
         {showResend && (
           <form onSubmit={handleResend} className="mt-6 text-left">
-            <label className="mb-2 block text-sm text-dust">
+            <label
+              htmlFor="verification-identifier"
+              className="mb-2 block text-sm font-medium text-ivory"
+            >
               Email or phone number
             </label>
             <input
+              id="verification-identifier"
               type="text"
               value={identifier}
               onChange={(event) => setIdentifier(event.target.value)}
-              placeholder="you@example.com"
-              className="w-full rounded-md border border-dust/20 bg-obsidian px-4 py-3 text-ivory placeholder:text-dust/50 focus:border-beeswax focus:outline-none"
+              placeholder="you@example.com or +254 700 000 000"
+              className="w-full rounded-lg border border-dust/25 bg-obsidian px-4 py-3 text-sm text-ivory placeholder:text-dust/55 focus:border-beeswax focus:outline-none"
+              autoComplete="username"
               required
             />
             {resend.isSuccess && (
-              <div className="mt-4 rounded-md border border-sage/40 bg-sage/10 px-4 py-3 text-sm text-ivory">
+              <div
+                className="mt-4 rounded-lg border border-sage/50 bg-sage/15 px-4 py-3 text-sm leading-6 text-ivory"
+                role="status"
+              >
                 {resend.data?.message ||
                   'If the account exists, a new verification email is on its way.'}
               </div>
             )}
             {resend.isError && (
-              <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              <div
+                className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-300"
+                role="alert"
+              >
                 {resend.error.message}
               </div>
             )}
             <Button
               type="submit"
               variant="outline"
-              className="mt-4 w-full"
+              className="mt-4 w-full py-3"
               disabled={resend.isPending || !identifier.trim()}
             >
               {resend.isPending ? 'Sending...' : 'Resend verification'}
@@ -168,12 +207,12 @@ export default function VerifyEmail() {
                 ? 'Email verified. Sign in to continue.'
                 : '',
             }}
-            className="mt-7 inline-block text-sm text-beeswax hover:underline"
+            className="mt-7 inline-block text-sm font-medium text-beeswax hover:underline"
           >
             Continue to sign in
           </Link>
         )}
-      </Card>
-    </div>
+      </section>
+    </AuthShell>
   );
 }

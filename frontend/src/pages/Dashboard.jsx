@@ -57,14 +57,159 @@ function QRCodeModal({ batchId, onClose }) {
   );
 }
 
+function CooperativeLockedState({ user, cooperativeId }) {
+  const hasAssignment = Boolean(cooperativeId);
+  const steps = [
+    {
+      title: 'Staff application received',
+      description: 'Your NectarTrace staff account has been created.',
+      state: 'complete',
+    },
+    {
+      title: 'Cooperative assignment',
+      description: hasAssignment
+        ? `Assigned to ${user.cooperative?.name || 'your cooperative'}.`
+        : 'An administrator must assign your account to a cooperative.',
+      state: hasAssignment ? 'complete' : 'current',
+    },
+    {
+      title: 'Cooperative verification',
+      description: hasAssignment
+        ? 'An administrator must verify the assigned cooperative.'
+        : 'Verification can begin after a cooperative is assigned.',
+      state: hasAssignment ? 'current' : 'pending',
+    },
+    {
+      title: 'Dashboard access',
+      description:
+        'Batch, offer, and listing tools unlock after both checks are complete.',
+      state: 'pending',
+    },
+  ];
+
+  return (
+    <div className="container-content flex min-h-[calc(100svh-72px)] items-center justify-center py-16 md:py-24">
+      <Card className="w-full max-w-2xl border-beeswax/20 bg-stone-deep p-6 sm:p-9">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-beeswax/30 bg-beeswax/10 text-beeswax">
+          <svg
+            width="26"
+            height="26"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            aria-hidden="true"
+          >
+            <rect x="5" y="10" width="14" height="10" rx="2" />
+            <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+          </svg>
+        </div>
+        <div className="mx-auto mt-6 max-w-xl text-center">
+          <p className="font-mono text-[0.68rem] uppercase tracking-[0.18em] text-beeswax">
+            Dashboard locked
+          </p>
+          <h1 className="mt-3 font-display text-3xl font-bold text-ivory text-balance">
+            {hasAssignment
+              ? 'Cooperative verification pending'
+              : 'Cooperative assignment pending'}
+          </h1>
+          <p className="mt-4 text-sm leading-6 text-dust text-pretty">
+            {hasAssignment
+              ? `Your account is assigned to ${user.cooperative?.name || 'a cooperative'}, but dashboard access stays locked until that cooperative is verified.`
+              : 'Your staff application is active, but dashboard access requires an administrator to assign you to a cooperative. The cooperative must also be verified.'}
+          </p>
+        </div>
+
+        <ol
+          className="mx-auto mt-8 max-w-lg"
+          aria-label="Dashboard access steps"
+        >
+          {steps.map((step, index) => {
+            const isComplete = step.state === 'complete';
+            const isCurrent = step.state === 'current';
+
+            return (
+              <li
+                key={step.title}
+                className="relative flex gap-4 pb-6 last:pb-0"
+                aria-current={isCurrent ? 'step' : undefined}
+              >
+                {index < steps.length - 1 && (
+                  <span
+                    className={`absolute left-[15px] top-8 h-[calc(100%-2rem)] w-px ${
+                      isComplete ? 'bg-sage' : 'bg-dust/20'
+                    }`}
+                    aria-hidden="true"
+                  />
+                )}
+                <span
+                  className={`relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border font-mono text-xs ${
+                    isComplete
+                      ? 'border-sage bg-sage text-ivory'
+                      : isCurrent
+                        ? 'border-beeswax bg-beeswax/10 text-beeswax'
+                        : 'border-dust/25 bg-obsidian text-dust'
+                  }`}
+                  aria-hidden="true"
+                >
+                  {isComplete ? (
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                    >
+                      <path d="m5 12 4 4L19 6" />
+                    </svg>
+                  ) : (
+                    index + 1
+                  )}
+                </span>
+                <div className="pt-0.5">
+                  <h2
+                    className={`text-sm font-semibold ${
+                      isCurrent || isComplete ? 'text-ivory' : 'text-dust'
+                    }`}
+                  >
+                    {step.title}
+                  </h2>
+                  <p className="mt-1 text-xs leading-5 text-dust">
+                    {step.description}
+                  </p>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+
+        <div className="mt-8 border-t border-dust/15 pt-6 text-center">
+          <p className="text-xs leading-5 text-dust">
+            No batch, offer, or listing data is loaded while access is locked.
+          </p>
+          <Button to="/marketplace" variant="outline" className="mt-5">
+            Browse the marketplace
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { user } = useAuth();
   const [showNewBatch, setShowNewBatch] = useState(false);
   const [showNewListing, setShowNewListing] = useState(false);
   const [qrBatchId, setQrBatchId] = useState(null);
   const cooperativeId = user.cooperativeId ?? user.cooperative?.id;
+  const isCooperativeLocked =
+    user.role === 'COOPERATIVE_STAFF' &&
+    (!cooperativeId || user.cooperative?.isVerified !== true);
   const canManageInventory =
-    Boolean(cooperativeId) && user.role === 'COOPERATIVE_STAFF';
+    Boolean(cooperativeId) &&
+    user.role === 'COOPERATIVE_STAFF' &&
+    !isCooperativeLocked;
 
   useEffect(() => {
     document.title = 'Dashboard — NectarTrace';
@@ -79,7 +224,7 @@ export default function Dashboard() {
     queryKey: ['coop-stats', cooperativeId],
     queryFn: () =>
       cooperativesApi.stats(cooperativeId).then((res) => res.data.data),
-    enabled: Boolean(cooperativeId),
+    enabled: canManageInventory,
   });
 
   // Fetch batches
@@ -90,8 +235,12 @@ export default function Dashboard() {
   } = useQuery({
     queryKey: ['my-batches'],
     queryFn: () => batchesApi.myBatches().then((res) => res.data.data),
-    enabled: Boolean(cooperativeId),
+    enabled: canManageInventory,
   });
+
+  if (isCooperativeLocked) {
+    return <CooperativeLockedState user={user} cooperativeId={cooperativeId} />;
+  }
 
   return (
     <div className="container-content py-20 md:py-28">
@@ -118,15 +267,6 @@ export default function Dashboard() {
           </div>
         )}
       </div>
-
-      {!cooperativeId && (
-        <Card className="p-6 border-beeswax/30 bg-beeswax/5">
-          <p className="text-beeswax text-sm">
-            Your account isn't linked to a cooperative. Contact your admin to be
-            assigned before registering batches or creating listings.
-          </p>
-        </Card>
-      )}
 
       {cooperativeId && (
         <>

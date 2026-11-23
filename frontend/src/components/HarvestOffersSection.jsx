@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { harvestOffersApi } from '../lib/api';
+import { harvestOffersApi, paymentsApi } from '../lib/api';
 import Badge from './ui/Badge';
 import Button from './ui/Button';
 import Card from './ui/Card';
@@ -10,18 +10,24 @@ import MonoText from './ui/MonoText';
 import Skeleton from './ui/Skeleton';
 import {
   AcceptOfferModal,
+  DeliveryOfferModal,
+  MarkSoldModal,
+  PayoutOfferModal,
   RejectOfferModal,
-  SettlementModal,
   VerifyOfferModal,
 } from './HarvestOfferModals';
 
 const STATUS_VARIANTS = {
-  SUBMITTED: 'pending',
-  ACCEPTED: 'pending',
-  REJECTED: 'sold',
-  RECEIVED: 'default',
-  VERIFIED: 'verified',
+  offered: 'pending',
+  accepted: 'pending',
+  rejected: 'sold',
+  expired: 'sold',
+  delivered: 'default',
+  verified: 'verified',
+  paid: 'verified',
 };
+
+const TERMINAL_STATUSES = new Set(['paid', 'rejected', 'expired']);
 
 function humanize(value) {
   if (!value) return 'Not set';
@@ -52,19 +58,25 @@ function formatKes(value) {
   }).format(number);
 }
 
-function formatDate(value) {
+function formatDate(value, includeTime = false) {
   if (!value) return 'Not set';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Not set';
-  return date.toLocaleDateString('en-KE', {
+  return new Intl.DateTimeFormat('en-KE', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
-  });
+    ...(includeTime && { hour: 'numeric', minute: '2-digit' }),
+  }).format(date);
 }
 
 function offerId(offer) {
   return offer.id ?? offer._id;
+}
+
+function paymentFromResponse(response) {
+  const data = response?.data?.data;
+  return data?.payment ?? data ?? null;
 }
 
 function Detail({ label, children, secondary }) {
@@ -83,96 +95,84 @@ function Detail({ label, children, secondary }) {
   );
 }
 
-function BatchSummary({ batch }) {
-  if (!batch) return null;
-
-  const moisture = batch.moisturePercent ?? batch.moistureContent;
-
-  return (
-    <div className="rounded-md border border-sage/25 bg-sage/10 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="font-mono text-xs uppercase tracking-widest text-sage">
-          Verified batch
-        </p>
-        <MonoText className="text-xs text-ivory">
-          {batch.batchId || batch.id}
-        </MonoText>
-      </div>
-      <p className="mt-3 text-sm text-ivory">
-        {batch.village || 'Village not set'} | {formatNumber(batch.weightKg)} kg
-        {moisture != null ? ` | ${formatNumber(moisture, 1)}% moisture` : ''}
-      </p>
-      {batch.harvestDate && (
-        <p className="mt-1 text-xs text-dust">
-          Harvested {formatDate(batch.harvestDate)}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function SettlementSummary({ settlement }) {
-  if (!settlement) return null;
-
-  const calculatedNet =
-    Number(settlement.grossAmount) - Number(settlement.commissionAmount);
-  const netAmount = settlement.netAmount ?? calculatedNet;
-  const paymentStatus = settlement.paymentStatus || settlement.status;
+function PaymentSummary({ payment }) {
+  if (!payment) return null;
+  const failed = ['failed', 'timeout'].includes(payment.status);
 
   return (
-    <div className="rounded-md border border-beeswax/25 bg-beeswax/5 p-4">
+    <div
+      className={`mt-5 rounded-md border p-4 ${
+        failed
+          ? 'border-red-500/25 bg-red-500/5'
+          : 'border-beeswax/25 bg-beeswax/5'
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="font-mono text-xs uppercase tracking-widest text-beeswax">
-          Settlement
+          Payout
         </p>
-        {paymentStatus && (
-          <Badge variant={paymentStatus === 'PAID' ? 'verified' : 'pending'}>
-            {humanize(paymentStatus)}
-          </Badge>
-        )}
+        <Badge
+          variant={
+            payment.status === 'succeeded'
+              ? 'verified'
+              : failed
+                ? 'sold'
+                : 'pending'
+          }
+        >
+          {humanize(payment.status)}
+        </Badge>
       </div>
-      <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
         <p>
-          <span className="block text-xs text-dust">Gross</span>
-          <span className="text-ivory">
-            {formatKes(settlement.grossAmount)}
+          <span className="block text-xs text-dust">Amount</span>
+          <span className="text-ivory">{formatKes(payment.amount)}</span>
+        </p>
+        <p>
+          <span className="block text-xs text-dust">Reference</span>
+          <span className="break-all font-mono text-xs text-ivory">
+            {payment.reference || 'Not set'}
           </span>
         </p>
         <p>
-          <span className="block text-xs text-dust">Commission</span>
-          <span className="text-ivory">
-            {formatKes(settlement.commissionAmount)}
-          </span>
-        </p>
-        <p>
-          <span className="block text-xs text-dust">Net</span>
-          <span className="text-ivory">{formatKes(netAmount)}</span>
-        </p>
-        <p>
-          <span className="block text-xs text-dust">Paid</span>
-          <span className="text-ivory">{formatKes(settlement.amountPaid)}</span>
+          <span className="block text-xs text-dust">Requested</span>
+          <span className="text-ivory">{formatDate(payment.requestedAt)}</span>
         </p>
       </div>
-      {settlement.paymentReference && (
-        <MonoText className="mt-3 block break-all text-xs">
-          Ref: {settlement.paymentReference}
-        </MonoText>
+      {payment.resultDescription && (
+        <p className={`mt-3 text-xs ${failed ? 'text-red-300' : 'text-dust'}`}>
+          {payment.resultDescription}
+        </p>
       )}
     </div>
   );
 }
 
-function OfferCard({ offer, pending, onAction, onMarkReceived }) {
+function OfferCard({ offer, pending, onAction }) {
   const id = offerId(offer);
   const status = offer.status;
-  const directSettlementEligible =
-    offer.settlementType === 'DIRECT_PURCHASE' &&
-    ['ACCEPTED', 'RECEIVED', 'VERIFIED'].includes(status);
-  const consignmentSettlementEligible =
-    offer.settlementType === 'CONSIGNMENT' &&
-    status === 'VERIFIED' &&
-    Number(offer.deliveredSalesAmount) > 0;
-  const canSettle = directSettlementEligible || consignmentSettlementEligible;
+  const isPaymentStage = status === 'verified' || status === 'paid';
+  const paymentQuery = useQuery({
+    queryKey: ['offer-payment', String(id)],
+    queryFn: () =>
+      paymentsApi
+        .getForOffer(id)
+        .then((response) => paymentFromResponse(response)),
+    enabled: Boolean(id) && isPaymentStage,
+    retry: (failureCount, error) => error.status !== 404 && failureCount < 1,
+  });
+  const payment = paymentQuery.data;
+  const paymentMissing = paymentQuery.error?.status === 404;
+  const canStartPayment =
+    status === 'verified' &&
+    !payment &&
+    !paymentQuery.isPending &&
+    (paymentMissing || !paymentQuery.error);
+  const payoutDetailsConfirmed = Boolean(offer.paymentDetailsConfirmedAt);
+  const directPayout = Number(offer.weighedKg) * Number(offer.agreedPricePerKg);
+  const commissionAmount =
+    (Number(offer.saleAmount) * Number(offer.commissionPercent)) / 100;
+  const consignmentPayout = Number(offer.saleAmount) - commissionAmount;
 
   return (
     <Card className="p-5 sm:p-6">
@@ -181,9 +181,14 @@ function OfferCard({ offer, pending, onAction, onMarkReceived }) {
           <MonoText className="block break-all text-beeswax">
             {offer.reference || id}
           </MonoText>
-          {offer.cooperative?.name && (
-            <p className="mt-1 text-xs text-dust">{offer.cooperative.name}</p>
-          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {offer.cooperative?.name && (
+              <p className="text-xs text-dust">{offer.cooperative.name}</p>
+            )}
+            {offer.farmer && !offer.farmer.isVerified && (
+              <Badge variant="sold">Farmer unverified</Badge>
+            )}
+          </div>
         </div>
         <Badge variant={STATUS_VARIANTS[status] || 'default'}>
           {humanize(status)}
@@ -191,39 +196,47 @@ function OfferCard({ offer, pending, onAction, onMarkReceived }) {
       </div>
 
       <dl className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <Detail
-          label="Farmer"
-          secondary={[
-            offer.farmer?.phone || 'Phone not available',
-            offer.pickupVillage ? `Pickup: ${offer.pickupVillage}` : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        >
+        <Detail label="Farmer" secondary={offer.farmer?.phone || 'No phone'}>
           {offer.farmer?.name || 'Farmer not available'}
         </Detail>
         <Detail
-          label="Offer"
+          label="Offered lot"
           secondary={`${formatKes(offer.expectedPricePerKg)} expected / kg`}
         >
-          {formatNumber(offer.offeredWeightKg)} kg
-        </Detail>
-        <Detail label="Settlement preference">
-          {humanize(offer.settlementType)}
+          {formatNumber(offer.offeredKg)} kg
         </Detail>
         <Detail
-          label="Agreed terms"
+          label="Trade"
           secondary={
-            offer.agreedPricePerKg != null
-              ? `${formatKes(offer.agreedPricePerKg)} / kg`
-              : 'Price not agreed'
+            offer.tradeType === 'consignment'
+              ? `${formatNumber(offer.commissionPercent)}% commission`
+              : 'No cooperative commission'
           }
         >
-          {offer.acceptedWeightKg != null
-            ? `${formatNumber(offer.acceptedWeightKg)} kg accepted`
-            : 'Awaiting review'}
+          {humanize(offer.tradeType)}
+        </Detail>
+        <Detail
+          label={offer.weighedKg != null ? 'Measured lot' : 'Offer expiry'}
+          secondary={
+            offer.weighedKg != null
+              ? `${formatNumber(offer.moisturePercent, 1)}% moisture`
+              : formatDate(offer.expiresAt, true)
+          }
+        >
+          {offer.weighedKg != null
+            ? `${formatNumber(offer.weighedKg)} kg`
+            : offer.agreedPricePerKg != null
+              ? `${formatKes(offer.agreedPricePerKg)} / kg agreed`
+              : 'Awaiting intake'}
         </Detail>
       </dl>
+
+      {offer.farmer && !offer.farmer.isVerified && (
+        <div className="mt-5 rounded-md border border-red-500/25 bg-red-500/5 p-4 text-sm text-red-200">
+          This farmer is not yet verified. Payout remains blocked until the
+          farmer is verified and has confirmed payout details with their PIN.
+        </div>
+      )}
 
       {offer.rejectionReason && (
         <div className="mt-5 rounded-md border border-red-500/20 bg-red-500/5 p-4">
@@ -236,35 +249,63 @@ function OfferCard({ offer, pending, onAction, onMarkReceived }) {
         </div>
       )}
 
-      {(offer.batch || offer.settlement) && (
-        <div className="mt-5 grid gap-4 lg:grid-cols-2">
-          <BatchSummary batch={offer.batch} />
-          <SettlementSummary settlement={offer.settlement} />
+      {offer.batchId && (
+        <div className="mt-5 rounded-md border border-sage/25 bg-sage/10 p-4 text-sm text-dust">
+          Included in batch{' '}
+          <MonoText className="text-ivory">{offer.batchId}</MonoText>
         </div>
       )}
 
-      {offer.settlementType === 'CONSIGNMENT' && status === 'VERIFIED' && (
+      {offer.tradeType === 'direct' && status === 'verified' && (
         <div className="mt-5 rounded-md border border-dust/15 bg-obsidian/40 p-4 text-sm text-dust">
-          Delivered marketplace sales:{' '}
+          Direct payout estimate:{' '}
           <span className="font-medium text-ivory">
-            {formatKes(offer.deliveredSalesAmount || 0)}
-          </span>{' '}
-          across {formatNumber(offer.deliveredSalesQuantityKg || 0)} kg.
-          {!consignmentSettlementEligible && (
-            <span className="mt-1 block text-xs">
-              Settlement becomes available after at least one order is
-              delivered.
-            </span>
-          )}
+            {formatKes(directPayout)}
+          </span>
+          .
         </div>
       )}
 
-      {(status === 'SUBMITTED' ||
-        status === 'ACCEPTED' ||
-        status === 'RECEIVED' ||
-        canSettle) && (
-        <div className="mt-6 flex flex-wrap gap-3 border-t border-dust/10 pt-5">
-          {status === 'SUBMITTED' && (
+      {offer.tradeType === 'consignment' && offer.saleAmount != null && (
+        <div className="mt-5 rounded-md border border-dust/15 bg-obsidian/40 p-4 text-sm text-dust">
+          Sale {formatKes(offer.saleAmount)} less {formatKes(commissionAmount)}{' '}
+          commission. Estimated farmer payout:{' '}
+          <span className="font-medium text-ivory">
+            {formatKes(consignmentPayout)}
+          </span>
+          .
+        </div>
+      )}
+
+      {isPaymentStage && !payoutDetailsConfirmed && !payment && (
+        <div className="mt-5 rounded-md border border-beeswax/25 bg-beeswax/5 p-4 text-sm text-beeswax">
+          Waiting for the farmer to PIN-confirm their payout details. Payment
+          actions stay disabled until confirmation is recorded.
+        </div>
+      )}
+
+      {paymentQuery.error && !paymentMissing && (
+        <div
+          role="alert"
+          className="mt-5 rounded-md border border-red-500/25 bg-red-500/5 p-4 text-sm text-red-300"
+        >
+          Unable to load payout status: {paymentQuery.error.message}
+        </div>
+      )}
+
+      <PaymentSummary payment={payment} />
+
+      {TERMINAL_STATUSES.has(status) && (
+        <p className="mt-5 border-t border-dust/10 pt-4 text-xs text-dust">
+          {status === 'paid'
+            ? 'Payout completed. This offer is closed.'
+            : `This ${status} offer is closed and has no further actions.`}
+        </p>
+      )}
+
+      {['offered', 'accepted', 'delivered', 'verified'].includes(status) && (
+        <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-dust/10 pt-5">
+          {status === 'offered' && (
             <>
               <Button
                 size="sm"
@@ -283,32 +324,55 @@ function OfferCard({ offer, pending, onAction, onMarkReceived }) {
               </Button>
             </>
           )}
-          {status === 'ACCEPTED' && (
+          {status === 'accepted' && (
             <Button
               size="sm"
-              onClick={() => onMarkReceived(offer)}
-              disabled={pending || !id}
+              onClick={() => onAction('delivery', offer)}
+              disabled={pending}
             >
-              {pending ? 'Updating...' : 'Mark received'}
+              Record delivery
             </Button>
           )}
-          {status === 'RECEIVED' && (
+          {status === 'delivered' && (
             <Button
               size="sm"
               onClick={() => onAction('verify', offer)}
               disabled={pending}
             >
-              Verify harvest
+              Verify lot
             </Button>
           )}
-          {canSettle && (
+          {status === 'verified' && paymentQuery.isPending && (
+            <p className="text-xs text-dust">Checking payout status...</p>
+          )}
+          {canStartPayment && offer.tradeType === 'direct' && (
             <Button
               size="sm"
               variant="outline"
-              onClick={() => onAction('settlement', offer)}
-              disabled={pending}
+              onClick={() => onAction('payout', offer)}
+              disabled={pending || !payoutDetailsConfirmed}
+              title={
+                payoutDetailsConfirmed
+                  ? undefined
+                  : 'Farmer PIN confirmation is required'
+              }
             >
-              {offer.settlement ? 'Update settlement' : 'Record settlement'}
+              Initiate payout
+            </Button>
+          )}
+          {canStartPayment && offer.tradeType === 'consignment' && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onAction('sold', offer)}
+              disabled={pending || !payoutDetailsConfirmed}
+              title={
+                payoutDetailsConfirmed
+                  ? undefined
+                  : 'Farmer PIN confirmation is required'
+              }
+            >
+              Mark sold and pay
             </Button>
           )}
         </div>
@@ -320,14 +384,18 @@ function OfferCard({ offer, pending, onAction, onMarkReceived }) {
 export default function HarvestOffersSection() {
   const queryClient = useQueryClient();
   const [action, setAction] = useState(null);
+  const [page, setPage] = useState(1);
 
   const offersQuery = useQuery({
-    queryKey: ['harvest-offers'],
+    queryKey: ['harvest-offers', 'manage', page],
     queryFn: async () => {
-      const response = await harvestOffersApi.list();
-      const data = response.data.data;
-      if (Array.isArray(data)) return data;
-      return data?.offers || [];
+      const response = await harvestOffersApi.list({ page, limit: 20 });
+      const responseData = response.data;
+      const data = responseData.data;
+      return {
+        offers: Array.isArray(data) ? data : data?.offers || [],
+        pagination: responseData.pagination || data?.pagination || null,
+      };
     },
   });
 
@@ -335,66 +403,117 @@ export default function HarvestOffersSection() {
     queryClient.invalidateQueries({ queryKey: ['harvest-offers'] });
   };
 
-  const statusMutation = useMutation({
-    mutationFn: ({ id, payload }) => harvestOffersApi.updateStatus(id, payload),
-    onSuccess: (_response, variables) => {
-      refreshOffers();
-      setAction(null);
-      toast.success(variables.successMessage);
-    },
-    onError: (error) => {
-      toast.error(error.message || 'Unable to update the offer');
-    },
+  const refreshOperationalData = (id, { batches = false } = {}) => {
+    refreshOffers();
+    queryClient.invalidateQueries({ queryKey: ['coop-stats'] });
+    if (batches) {
+      queryClient.invalidateQueries({ queryKey: ['my-batches'] });
+    }
+    if (id) {
+      queryClient.invalidateQueries({
+        queryKey: ['offer-payment', String(id)],
+      });
+    }
+    queryClient.invalidateQueries({ queryKey: ['payments'] });
+  };
+
+  const closeWithSuccess = (message, id, options) => {
+    refreshOperationalData(id, options);
+    setAction(null);
+    toast.success(message);
+  };
+
+  const showActionError = (error, id) => {
+    const message = error.message || 'Unable to update the offer';
+    const payment = error.data?.data?.payment;
+    if (payment && id) {
+      queryClient.setQueryData(['offer-payment', String(id)], payment);
+    }
+    setAction((current) =>
+      current ? { ...current, error: message } : current
+    );
+    toast.error(message);
+  };
+
+  const acceptMutation = useMutation({
+    mutationFn: ({ id, payload }) => harvestOffersApi.accept(id, payload),
+    onSuccess: (_response, variables) =>
+      closeWithSuccess('Harvest offer accepted', variables.id),
+    onError: (error, variables) => showActionError(error, variables.id),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: ({ id, payload }) => harvestOffersApi.reject(id, payload),
+    onSuccess: (_response, variables) =>
+      closeWithSuccess('Harvest offer rejected', variables.id),
+    onError: (error, variables) => showActionError(error, variables.id),
+  });
+
+  const deliveryMutation = useMutation({
+    mutationFn: ({ id, payload }) => harvestOffersApi.delivery(id, payload),
+    onSuccess: (_response, variables) =>
+      closeWithSuccess('Delivered lot measurements recorded', variables.id),
+    onError: (error, variables) => showActionError(error, variables.id),
   });
 
   const verifyMutation = useMutation({
-    mutationFn: ({ id, payload }) => harvestOffersApi.verify(id, payload),
-    onSuccess: () => {
-      refreshOffers();
-      queryClient.invalidateQueries({ queryKey: ['my-batches'] });
-      queryClient.invalidateQueries({ queryKey: ['coop-stats'] });
-      setAction(null);
-      toast.success('Harvest verified and batch created');
-    },
-    onError: (error) => {
-      toast.error(error.message || 'Unable to verify the harvest');
-    },
+    mutationFn: ({ id }) => harvestOffersApi.verify(id),
+    onSuccess: (_response, variables) =>
+      closeWithSuccess(
+        'Lot verified and ready for batch selection',
+        variables.id,
+        {
+          batches: true,
+        }
+      ),
+    onError: (error, variables) => showActionError(error, variables.id),
   });
 
-  const settlementMutation = useMutation({
-    mutationFn: ({ id, payload }) =>
-      harvestOffersApi.updateSettlement(id, payload),
-    onSuccess: (response) => {
-      refreshOffers();
-      setAction(null);
-      const data = response.data.data;
-      const settlement = data?.settlement || data;
-      const paymentStatus = settlement?.paymentStatus || settlement?.status;
-      toast.success(
-        paymentStatus
-          ? `Settlement saved: ${humanize(paymentStatus)}`
-          : 'Settlement saved'
+  const payoutMutation = useMutation({
+    mutationFn: ({ id, payload }) => paymentsApi.initiatePayout(id, payload),
+    onSuccess: (response, variables) => {
+      const payment = paymentFromResponse(response);
+      if (payment) {
+        queryClient.setQueryData(
+          ['offer-payment', String(variables.id)],
+          payment
+        );
+      }
+      closeWithSuccess('Direct payout submitted', variables.id);
+    },
+    onError: (error, variables) => showActionError(error, variables.id),
+  });
+
+  const soldMutation = useMutation({
+    mutationFn: ({ id, payload }) => harvestOffersApi.sold(id, payload),
+    onSuccess: (response, variables) => {
+      const payment = paymentFromResponse(response);
+      if (payment) {
+        queryClient.setQueryData(
+          ['offer-payment', String(variables.id)],
+          payment
+        );
+      }
+      closeWithSuccess(
+        'Consignment sale recorded and payout submitted',
+        variables.id
       );
     },
-    onError: (error) => {
-      toast.error(error.message || 'Unable to save the settlement');
-    },
+    onError: (error, variables) => showActionError(error, variables.id),
   });
 
   const pending =
-    statusMutation.isPending ||
+    acceptMutation.isPending ||
+    rejectMutation.isPending ||
+    deliveryMutation.isPending ||
     verifyMutation.isPending ||
-    settlementMutation.isPending;
+    payoutMutation.isPending ||
+    soldMutation.isPending;
+  const offers = offersQuery.data?.offers || [];
+  const pagination = offersQuery.data?.pagination;
 
-  const openAction = (type, offer) => setAction({ type, offer });
-
-  const markReceived = (offer) => {
-    statusMutation.mutate({
-      id: offerId(offer),
-      payload: { status: 'RECEIVED' },
-      successMessage: 'Offer marked as received',
-    });
-  };
+  const openAction = (type, offer) => setAction({ type, offer, error: '' });
+  const actionId = action ? offerId(action.offer) : null;
 
   return (
     <section className="mb-16" aria-labelledby="harvest-offers-heading">
@@ -452,56 +571,87 @@ export default function HarvestOffersSection() {
         </Card>
       )}
 
-      {!offersQuery.isLoading &&
-        !offersQuery.error &&
-        offersQuery.data.length === 0 && (
-          <Card>
-            <EmptyState
-              title="No harvest offers"
-              description="Farmer offers assigned to this cooperative will appear here for intake review."
-            />
-          </Card>
-        )}
+      {!offersQuery.isLoading && !offersQuery.error && offers.length === 0 && (
+        <Card>
+          <EmptyState
+            title="No harvest offers"
+            description="Farmer offers assigned to this cooperative will appear here for intake review."
+          />
+        </Card>
+      )}
 
-      {offersQuery.data?.length > 0 && (
+      {offers.length > 0 && (
         <div className="space-y-4">
-          {offersQuery.data.map((offer, index) => (
+          {offers.map((offer, index) => (
             <OfferCard
               key={offerId(offer) || offer.reference || index}
               offer={offer}
               pending={pending}
               onAction={openAction}
-              onMarkReceived={markReceived}
             />
           ))}
         </div>
       )}
 
+      {pagination?.totalPages > 1 && (
+        <nav
+          className="mt-6 flex items-center justify-between gap-4"
+          aria-label="Harvest offer pages"
+        >
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+            disabled={page <= 1 || offersQuery.isFetching}
+          >
+            Previous
+          </Button>
+          <p className="text-xs text-dust">
+            Page {pagination.page} of {pagination.totalPages}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => setPage((current) => current + 1)}
+            disabled={page >= pagination.totalPages || offersQuery.isFetching}
+          >
+            Next
+          </Button>
+        </nav>
+      )}
+
       {action?.type === 'accept' && (
         <AcceptOfferModal
           offer={action.offer}
-          pending={statusMutation.isPending}
+          pending={acceptMutation.isPending}
+          serverError={action.error}
           onClose={() => setAction(null)}
           onSubmit={(payload) =>
-            statusMutation.mutate({
-              id: offerId(action.offer),
-              payload,
-              successMessage: 'Harvest offer accepted',
-            })
+            acceptMutation.mutate({ id: actionId, payload })
           }
         />
       )}
       {action?.type === 'reject' && (
         <RejectOfferModal
           offer={action.offer}
-          pending={statusMutation.isPending}
+          pending={rejectMutation.isPending}
+          serverError={action.error}
           onClose={() => setAction(null)}
           onSubmit={(payload) =>
-            statusMutation.mutate({
-              id: offerId(action.offer),
-              payload,
-              successMessage: 'Harvest offer rejected',
-            })
+            rejectMutation.mutate({ id: actionId, payload })
+          }
+        />
+      )}
+      {action?.type === 'delivery' && (
+        <DeliveryOfferModal
+          offer={action.offer}
+          pending={deliveryMutation.isPending}
+          serverError={action.error}
+          onClose={() => setAction(null)}
+          onSubmit={(payload) =>
+            deliveryMutation.mutate({ id: actionId, payload })
           }
         />
       )}
@@ -509,26 +659,29 @@ export default function HarvestOffersSection() {
         <VerifyOfferModal
           offer={action.offer}
           pending={verifyMutation.isPending}
+          serverError={action.error}
+          onClose={() => setAction(null)}
+          onSubmit={() => verifyMutation.mutate({ id: actionId })}
+        />
+      )}
+      {action?.type === 'payout' && (
+        <PayoutOfferModal
+          offer={action.offer}
+          pending={payoutMutation.isPending}
+          serverError={action.error}
           onClose={() => setAction(null)}
           onSubmit={(payload) =>
-            verifyMutation.mutate({
-              id: offerId(action.offer),
-              payload,
-            })
+            payoutMutation.mutate({ id: actionId, payload })
           }
         />
       )}
-      {action?.type === 'settlement' && (
-        <SettlementModal
+      {action?.type === 'sold' && (
+        <MarkSoldModal
           offer={action.offer}
-          pending={settlementMutation.isPending}
+          pending={soldMutation.isPending}
+          serverError={action.error}
           onClose={() => setAction(null)}
-          onSubmit={(payload) =>
-            settlementMutation.mutate({
-              id: offerId(action.offer),
-              payload,
-            })
-          }
+          onSubmit={(payload) => soldMutation.mutate({ id: actionId, payload })}
         />
       )}
     </section>

@@ -3,6 +3,9 @@ import { getPendingOrderPath } from './pendingOrder';
 export function getAuthenticatedHome(user) {
   if (user?.role === 'ADMIN') return '/admin';
   if (user?.role === 'COOPERATIVE_STAFF') return '/dashboard';
+  if (user?.role === 'BUYER') {
+    return getPendingOrderPath() || '/marketplace';
+  }
   return '/marketplace';
 }
 

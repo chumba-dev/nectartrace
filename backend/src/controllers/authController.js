@@ -10,15 +10,62 @@ const {
   normalizeEmail,
   normalizePhone,
   phoneLookupCandidates,
+  normalizePublicRole,
 } = require('../utils/normalization');
 
-const PUBLIC_ROLES = ['BUYER', 'COOPERATIVE_STAFF'];
+const PUBLIC_ROLES = ['COOPERATIVE_STAFF', 'BUYER', 'FARMER', 'CONSUMER'];
 const GENERIC_RESEND_MESSAGE = 'If an eligible account exists, a verification email has been sent.';
+const SAFE_COOPERATIVE_SELECT = {
+  id: true,
+  name: true,
+  village: true,
+  ward: true,
+  county: true,
+  walletAddress: true,
+  registrationNumber: true,
+  phone: true,
+  isVerified: true,
+  createdAt: true,
+  updatedAt: true,
+};
+const AUTH_USER_SELECT = {
+  id: true,
+  name: true,
+  phone: true,
+  email: true,
+  passwordHash: true,
+  googleId: true,
+  emailVerifiedAt: true,
+  role: true,
+  cooperativeId: true,
+  walletAddress: true,
+  isActive: true,
+  createdAt: true,
+  updatedAt: true,
+  cooperative: { select: SAFE_COOPERATIVE_SELECT },
+};
 let googleClient;
 
 function getGoogleClient() {
   if (!googleClient) googleClient = new OAuth2Client(env.google.clientId);
   return googleClient;
+}
+
+function publicCooperative(cooperative) {
+  if (!cooperative) return cooperative;
+  return {
+    id: cooperative.id,
+    name: cooperative.name,
+    village: cooperative.village,
+    ward: cooperative.ward,
+    county: cooperative.county,
+    walletAddress: cooperative.walletAddress,
+    registrationNumber: cooperative.registrationNumber,
+    phone: cooperative.phone,
+    isVerified: cooperative.isVerified,
+    createdAt: cooperative.createdAt,
+    updatedAt: cooperative.updatedAt,
+  };
 }
 
 function publicUser(user) {
@@ -29,7 +76,7 @@ function publicUser(user) {
     email: user.email,
     role: user.role,
     cooperativeId: user.cooperativeId,
-    ...(user.cooperative !== undefined && { cooperative: user.cooperative }),
+    ...(user.cooperative !== undefined && { cooperative: publicCooperative(user.cooperative) }),
     ...(user.walletAddress !== undefined && { walletAddress: user.walletAddress }),
     ...(user.createdAt !== undefined && { createdAt: user.createdAt }),
     emailVerifiedAt: user.emailVerifiedAt ?? null,
@@ -73,14 +120,14 @@ async function findUserByIdentifier(identifier) {
     if (!email) return null;
     return prisma.user.findUnique({
       where: { email },
-      include: { cooperative: true },
+      select: AUTH_USER_SELECT,
     });
   }
 
   for (const phone of phoneLookupCandidates(rawIdentifier)) {
     const user = await prisma.user.findUnique({
       where: { phone },
-      include: { cooperative: true },
+      select: AUTH_USER_SELECT,
     });
     if (user) return user;
   }
@@ -95,6 +142,7 @@ async function register(req, res, next) {
     const email = normalizeEmail(req.body.email);
     const phone = normalizePhone(req.body.phone);
     const { password, role } = req.body;
+    const normalizedRole = normalizePublicRole(role);
 
     if (!name || !email || !phone || !password) {
       return res.status(400).json({
@@ -111,17 +159,20 @@ async function register(req, res, next) {
         message: 'Password must be at least 8 characters long',
       });
     }
-    if (!PUBLIC_ROLES.includes(role)) {
+    if (!normalizedRole) {
       return res.status(400).json({
         success: false,
         message: `Role must be one of: ${PUBLIC_ROLES.join(', ')}`,
       });
     }
 
-    const existingEmail = await prisma.user.findUnique({ where: { email } });
+    const existingEmail = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
     const existingPhone = existingEmail
       ? null
-      : await prisma.user.findUnique({ where: { phone } });
+      : await prisma.user.findUnique({ where: { phone }, select: { id: true } });
     if (existingEmail || existingPhone) {
       return res.status(409).json({
         success: false,
@@ -136,7 +187,7 @@ async function register(req, res, next) {
         phone,
         email,
         passwordHash,
-        role,
+        role: normalizedRole,
         cooperativeId: null,
       },
       select: {
@@ -179,7 +230,6 @@ async function verifyEmail(req, res, next) {
 
     const record = await prisma.emailVerificationToken.findUnique({
       where: { tokenHash: hashVerificationToken(token) },
-      include: { user: true },
     });
     if (!record || record.expiresAt <= new Date()) {
       if (record) {
@@ -195,7 +245,7 @@ async function verifyEmail(req, res, next) {
     const userUpdate = prisma.user.update({
       where: { id: record.userId },
       data: { emailVerifiedAt: verifiedAt },
-      include: { cooperative: true },
+      select: AUTH_USER_SELECT,
     });
     const tokenDelete = prisma.emailVerificationToken.delete({ where: { id: record.id } });
     const [user] = await prisma.$transaction([userUpdate, tokenDelete]);
@@ -307,13 +357,13 @@ async function googleAuth(req, res, next) {
 
     let user = await prisma.user.findUnique({
       where: { googleId: payload.sub },
-      include: { cooperative: true },
+      select: AUTH_USER_SELECT,
     });
     let foundByEmail = false;
     if (!user) {
       user = await prisma.user.findUnique({
         where: { email },
-        include: { cooperative: true },
+        select: AUTH_USER_SELECT,
       });
       foundByEmail = Boolean(user);
     }
@@ -337,7 +387,7 @@ async function googleAuth(req, res, next) {
               googleId: payload.sub,
               emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
             },
-            include: { cooperative: true },
+            select: AUTH_USER_SELECT,
           });
           await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } });
         } catch (err) {
@@ -358,7 +408,8 @@ async function googleAuth(req, res, next) {
           code: 'GOOGLE_PROFILE_INCOMPLETE',
         });
       }
-      if (!PUBLIC_ROLES.includes(req.body.role)) {
+      const normalizedRole = normalizePublicRole(req.body.role);
+      if (!normalizedRole) {
         return res.status(400).json({
           success: false,
           message: `Role must be one of: ${PUBLIC_ROLES.join(', ')}`,
@@ -369,7 +420,10 @@ async function googleAuth(req, res, next) {
       if (!phone) {
         return res.status(400).json({ success: false, message: 'A valid phone number is required' });
       }
-      const phoneOwner = await prisma.user.findUnique({ where: { phone } });
+      const phoneOwner = await prisma.user.findUnique({
+        where: { phone },
+        select: { id: true },
+      });
       if (phoneOwner) {
         return res.status(409).json({
           success: false,
@@ -386,13 +440,13 @@ async function googleAuth(req, res, next) {
               : email.split('@')[0],
             email,
             phone,
-            role: req.body.role,
+            role: normalizedRole,
             passwordHash: null,
             googleId: payload.sub,
             emailVerifiedAt: new Date(),
             cooperativeId: null,
           },
-          include: { cooperative: true },
+          select: AUTH_USER_SELECT,
         });
       } catch (err) {
         if (err.code === 'P2002') {
@@ -422,7 +476,7 @@ async function getMe(req, res, next) {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      include: { cooperative: true },
+      select: AUTH_USER_SELECT,
     });
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
@@ -468,7 +522,7 @@ async function updateMe(req, res, next) {
     const user = await prisma.user.update({
       where: { id: req.user.id },
       data,
-      include: { cooperative: true },
+      select: AUTH_USER_SELECT,
     });
     const emailSent = emailChanged ? await issueVerificationEmail(user) : undefined;
 

@@ -5,6 +5,7 @@ const {
   changeUserRole,
   toggleUserActive,
   createCooperative,
+  verifyCooperative,
   getPlatformStats,
 } = require('../controllers/adminController');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -20,6 +21,7 @@ router.put('/users/:id/cooperative', assignCooperative);
 router.put('/users/:id/role', changeUserRole);
 router.put('/users/:id/active', toggleUserActive);
 router.post('/cooperatives', createCooperative);
+router.put('/cooperatives/:id/verify', verifyCooperative);
 router.get('/stats', getPlatformStats);
 
 module.exports = router;
