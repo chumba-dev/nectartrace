@@ -21,14 +21,13 @@ const mockPrisma = {
   priceHistory: {
     findFirst: jest.fn(),
   },
-};
-
-const mockOfferModel = {
-  find: jest.fn(),
-  findOne: jest.fn(),
-  findOneAndUpdate: jest.fn(),
-  create: jest.fn(),
-  updateMany: jest.fn(),
+  offer: {
+    findMany: jest.fn(),
+    findFirst: jest.fn(),
+    findUnique: jest.fn(),
+    create: jest.fn(),
+    updateMany: jest.fn(),
+  },
 };
 
 const mockSmsService = {
@@ -48,7 +47,6 @@ const mockBcrypt = {
 };
 
 jest.mock('../src/config/db', () => mockPrisma);
-jest.mock('../src/models/Offer', () => mockOfferModel);
 jest.mock('../src/services/smsService', () => mockSmsService);
 jest.mock('../src/utils/logger', () => mockLogger);
 jest.mock('bcryptjs', () => mockBcrypt);
@@ -72,6 +70,7 @@ let harvestLogs;
 let offers;
 let sessionClock;
 let nextUserId;
+let nextOfferId;
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -137,6 +136,7 @@ beforeEach(() => {
   offers = [];
   sessionClock = 0;
   nextUserId = 100;
+  nextOfferId = 1;
 
   mockPrisma.ussdSession.upsert.mockImplementation(async ({ where, create }) => {
     let session = sessions.get(where.id);
@@ -221,51 +221,52 @@ beforeEach(() => {
   mockPrisma.harvestLog.aggregate.mockResolvedValue({ _sum: { weightKg: 0 } });
   mockPrisma.priceHistory.findFirst.mockResolvedValue({ pricePerKg: 750 });
 
-  mockOfferModel.findOne.mockImplementation(async (filter) => offers.find((offer) => (
-    (filter.ussdSessionId === undefined || offer.ussdSessionId === filter.ussdSessionId)
-    && (filter.reference === undefined || offer.reference === filter.reference)
-    && (filter.farmerId === undefined || offer.farmerId === filter.farmerId)
+  mockPrisma.offer.findUnique.mockImplementation(async ({ where }) => offers.find((offer) => (
+    (where.id === undefined || offer.id === where.id)
+    && (where.ussdSessionId === undefined || offer.ussdSessionId === where.ussdSessionId)
+    && (where.reference === undefined || offer.reference === where.reference)
   )) || null);
-  mockOfferModel.findOneAndUpdate.mockImplementation(async (filter, update) => {
-    const selected = offers.find((offer) => (
-      (filter.reference === undefined || offer.reference === filter.reference)
-      && (filter.farmerId === undefined || offer.farmerId === filter.farmerId)
-      && (filter.status?.$ne === undefined || offer.status !== filter.status.$ne)
-    ));
-    if (!selected) return null;
-    Object.assign(selected, update.$set);
-    return selected;
-  });
-  mockOfferModel.updateMany.mockImplementation(async (filter, update) => {
-    let modifiedCount = 0;
-    for (const offer of offers) {
-      if (offer.farmerId !== filter.farmerId || offer.status === filter.status.$ne) continue;
-      if (offer.paymentDetailsConfirmedAt === null || offer.paymentDetailsConfirmedAt === undefined) {
-        continue;
-      }
-      Object.assign(offer, update.$set);
-      modifiedCount += 1;
+  mockPrisma.offer.findFirst.mockImplementation(async ({ where }) => offers.find((offer) => (
+    (where.id === undefined || offer.id === where.id)
+    && (where.reference === undefined || offer.reference === where.reference)
+    && (where.farmerId === undefined || offer.farmerId === where.farmerId)
+  )) || null);
+  mockPrisma.offer.updateMany.mockImplementation(async ({ where, data }) => {
+    let count = 0;
+    for (const selected of offers) {
+      if (where.id !== undefined && selected.id !== where.id) continue;
+      if (where.reference !== undefined && selected.reference !== where.reference) continue;
+      if (where.farmerId !== undefined && selected.farmerId !== where.farmerId) continue;
+      if (where.status?.not !== undefined && selected.status === where.status.not) continue;
+      if (
+        where.paymentDetailsConfirmedAt?.not === null
+        && (selected.paymentDetailsConfirmedAt === null
+          || selected.paymentDetailsConfirmedAt === undefined)
+      ) continue;
+      Object.assign(selected, data);
+      count += 1;
     }
-    return { modifiedCount };
+    return { count };
   });
-  mockOfferModel.create.mockImplementation(async (data) => {
+  mockPrisma.offer.create.mockImplementation(async ({ data }) => {
     if (offers.some((offer) => offer.ussdSessionId === data.ussdSessionId)) {
-      const error = new Error('Duplicate offer');
-      error.code = 11000;
+      const error = new Error('Unique constraint');
+      error.code = 'P2002';
       throw error;
     }
-    const offer = {
-      _id: `offer-${offers.length + 1}`,
+    const created = {
+      id: nextOfferId,
       createdAt: new Date(),
       ...data,
     };
-    offers.push(offer);
-    return offer;
+    nextOfferId += 1;
+    offers.push(created);
+    return created;
   });
-  mockOfferModel.find.mockImplementation(async (filter, projection, options) => offers
-    .filter((offer) => offer.farmerId === filter.farmerId)
+  mockPrisma.offer.findMany.mockImplementation(async ({ where, orderBy, skip, take }) => offers
+    .filter((offer) => offer.farmerId === where.farmerId)
     .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))
-    .slice(options.skip, options.skip + options.limit));
+    .slice(skip, skip + take));
 
   mockSmsService.sendHarvestConfirmation.mockResolvedValue({});
   mockSmsService.sendHarvestOfferConfirmation.mockResolvedValue({});
@@ -409,10 +410,10 @@ test('offer flow rejects non-finite, zero, and excessive kilograms', async () =>
       expect(response).toContain('up to 10000');
     }
   }
-  expect(mockOfferModel.create).not.toHaveBeenCalled();
+  expect(mockPrisma.offer.create).not.toHaveBeenCalled();
 });
 
-test('offer confirmation uses Mongo, snapshots current commission, and identical retry is idempotent', async () => {
+test('offer confirmation uses Prisma, snapshots current commission, and identical retry is idempotent', async () => {
   addUser();
   cooperatives = [verifiedCooperative({ commissionPercent: 9.75 })];
   const sessionId = 'offer-idempotent';
@@ -428,8 +429,8 @@ test('offer confirmation uses Mongo, snapshots current commission, and identical
   const retried = await event(sessionId, cumulative);
 
   expect(retried).toBe(submitted);
-  expect(mockOfferModel.create).toHaveBeenCalledTimes(1);
-  const created = mockOfferModel.create.mock.calls[0][0];
+  expect(mockPrisma.offer.create).toHaveBeenCalledTimes(1);
+  const created = mockPrisma.offer.create.mock.calls[0][0].data;
   expect(created).toEqual(expect.objectContaining({
     farmerId: 6,
     cooperativeId: 14,
@@ -490,7 +491,7 @@ test('My Offers is newest-first, farmer-scoped, and paginated four at a time', a
   const second = await event(sessionId, '5*98');
   const back = await event(sessionId, '5*98*0');
 
-  expect(mockOfferModel.find.mock.calls[0][0]).toEqual({ farmerId: 6 });
+  expect(mockPrisma.offer.findMany.mock.calls[0][0].where).toEqual({ farmerId: 6 });
   expect(first).toContain('NTO-MINE-5');
   expect(first).not.toContain('NTO-OTHER');
   expect(listItemLines(first)).toHaveLength(4);
@@ -502,7 +503,7 @@ test('My Offers is newest-first, farmer-scoped, and paginated four at a time', a
 test('My Offers confirms payout details with the correct PIN and never initiates payment', async () => {
   addUser(activeFarmer({ mpesaNumber: '+254712345678' }));
   offers = [{
-    _id: 'offer-confirm',
+    id: 22,
     farmerId: 6,
     reference: 'NTO-MINE-CONFIRM',
     status: 'verified',
@@ -527,13 +528,14 @@ test('My Offers confirms payout details with the correct PIN and never initiates
   expect(pinPrompt).toContain('4-digit PIN');
   expect(wrongPin).toContain('Incorrect PIN');
   expect(confirmed).toContain('Payout details confirmed');
-  expect(mockOfferModel.findOneAndUpdate).toHaveBeenCalledWith({
-    reference: 'NTO-MINE-CONFIRM',
-    farmerId: 6,
-    status: { $ne: 'paid' },
-  }, {
-    $set: { paymentDetailsConfirmedAt: expect.any(Date) },
-  }, { new: true, runValidators: true });
+  expect(mockPrisma.offer.updateMany).toHaveBeenCalledWith({
+    where: {
+      reference: 'NTO-MINE-CONFIRM',
+      farmerId: 6,
+      status: { not: 'paid' },
+    },
+    data: { paymentDetailsConfirmedAt: expect.any(Date) },
+  });
   expect(offers[0].paymentDetailsConfirmedAt).toEqual(expect.any(Date));
   expect(mockSmsService.sendHarvestConfirmation).not.toHaveBeenCalled();
   expect(mockSmsService.sendHarvestOfferConfirmation).not.toHaveBeenCalled();
@@ -576,13 +578,14 @@ test('M-Pesa change requires the correct PIN, stores only normalized number, and
     data: { mpesaNumber: '+254712345678' },
     select: { id: true },
   });
-  expect(mockOfferModel.updateMany).toHaveBeenCalledWith({
-    farmerId: 6,
-    status: { $ne: 'paid' },
-    paymentDetailsConfirmedAt: { $ne: null },
-  }, {
-    $set: { paymentDetailsConfirmedAt: null },
-  }, { runValidators: true });
+  expect(mockPrisma.offer.updateMany).toHaveBeenCalledWith({
+    where: {
+      farmerId: 6,
+      status: { not: 'paid' },
+      paymentDetailsConfirmedAt: { not: null },
+    },
+    data: { paymentDetailsConfirmedAt: null },
+  });
   expect(offers[0].paymentDetailsConfirmedAt).toBeNull();
   expect(offers[1].paymentDetailsConfirmedAt).toEqual(expect.any(Date));
   expect(updated).toContain('******5678');

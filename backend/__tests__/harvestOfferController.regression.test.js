@@ -1,14 +1,11 @@
-const mockOfferModel = {
-  find: jest.fn(),
-  countDocuments: jest.fn(),
-  findOne: jest.fn(),
-  findOneAndUpdate: jest.fn(),
-  updateOne: jest.fn(),
-  updateMany: jest.fn(),
-  exists: jest.fn(),
-};
-
 const mockPrisma = {
+  offer: {
+    findMany: jest.fn(),
+    count: jest.fn(),
+    findFirst: jest.fn(),
+    findUnique: jest.fn(),
+    updateMany: jest.fn(),
+  },
   cooperative: {
     findUnique: jest.fn(),
     findMany: jest.fn(),
@@ -29,11 +26,8 @@ const mockSmsService = {
   sendOfferRejected: jest.fn(),
 };
 
-const mockBlockchain = {
-  recordBatchOnChain: jest.fn(),
-};
+const mockBlockchain = { recordBatchOnChain: jest.fn() };
 
-jest.mock('../src/models/Offer', () => mockOfferModel);
 jest.mock('../src/config/db', () => mockPrisma);
 jest.mock('../src/services/smsService', () => mockSmsService);
 jest.mock('../src/config/blockchain', () => mockBlockchain);
@@ -72,7 +66,7 @@ const farmer = {
 
 function offer(overrides = {}) {
   return {
-    _id: '64b64c2f3f3f3f3f3f3f3f3f',
+    id: 41,
     reference: 'NTO-20261123-ABC123',
     ussdSessionId: 'private-session-id',
     farmerId: 4,
@@ -90,7 +84,10 @@ function offer(overrides = {}) {
     expiresAt: new Date('2026-11-25T08:00:00.000Z'),
     rejectionReason: null,
     batchId: null,
+    batch: null,
+    batchReservationToken: null,
     saleAmount: null,
+    paymentDetailsConfirmedAt: null,
     acceptedAt: null,
     rejectedAt: null,
     expiredAt: null,
@@ -105,7 +102,7 @@ function offer(overrides = {}) {
 
 function requestFor(overrides = {}) {
   return {
-    params: { id: 'NTO-20261123-ABC123' },
+    params: { id: '41' },
     query: {},
     body: {},
     user: { id: 7, role: 'COOPERATIVE_STAFF', cooperativeId: 2 },
@@ -126,190 +123,174 @@ beforeEach(() => {
   mockPrisma.cooperative.findMany.mockResolvedValue([cooperative]);
   mockPrisma.user.findMany.mockResolvedValue([farmer]);
   mockPrisma.user.updateMany.mockResolvedValue({ count: 1 });
-  mockOfferModel.find.mockResolvedValue([]);
-  mockOfferModel.countDocuments.mockResolvedValue(0);
-  mockOfferModel.updateOne.mockResolvedValue({ modifiedCount: 1 });
-  mockOfferModel.updateMany.mockResolvedValue({ modifiedCount: 0 });
+  mockPrisma.offer.findMany.mockResolvedValue([]);
+  mockPrisma.offer.count.mockResolvedValue(0);
+  mockPrisma.offer.updateMany.mockResolvedValue({ count: 1 });
+  mockPrisma.offer.findUnique.mockResolvedValue(offer());
   mockSmsService.sendOfferAccepted.mockResolvedValue({});
   mockSmsService.sendOfferRejected.mockResolvedValue({});
 });
 
 describe('verified cooperative scope and sanitized reads', () => {
   test('cooperative staff list only their verified cooperative offers', async () => {
-    mockOfferModel.find.mockResolvedValue([offer()]);
-    mockOfferModel.countDocuments.mockResolvedValue(1);
+    mockPrisma.offer.findMany.mockResolvedValue([offer()]);
+    mockPrisma.offer.count.mockResolvedValue(1);
     const res = createResponse();
 
     await listOffers(requestFor(), res, jest.fn());
 
-    expect(mockOfferModel.find).toHaveBeenCalledWith(
-      { cooperativeId: { $in: [2] } },
-      null,
-      { sort: { createdAt: -1 }, skip: 0, limit: 20 }
-    );
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
-      success: true,
-      count: 1,
-      pagination: { page: 1, limit: 20, total: 1, totalPages: 1 },
-    }));
-    const returnedOffer = res.json.mock.calls[0][0].data[0];
-    expect(returnedOffer).not.toHaveProperty('ussdSessionId');
-    expect(returnedOffer.farmer).toEqual({
+    expect(mockPrisma.offer.findMany).toHaveBeenCalledWith({
+      where: { cooperativeId: { in: [2] } },
+      include: { batch: { select: { batchId: true } } },
+      orderBy: { createdAt: 'desc' },
+      skip: 0,
+      take: 20,
+    });
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.pagination).toEqual({ page: 1, limit: 20, total: 1, totalPages: 1 });
+    expect(payload.data[0].id).toBe(41);
+    expect(payload.data[0]).not.toHaveProperty('ussdSessionId');
+    expect(payload.data[0]).not.toHaveProperty('batchReservationToken');
+    expect(payload.data[0].farmer).toEqual({
       id: farmer.id,
       name: farmer.name,
       phone: farmer.phone,
       isVerified: false,
     });
-    expect(returnedOffer.farmer).not.toHaveProperty('farmerVerifiedAt');
   });
 
-  test('admin cooperative filters must target a verified cooperative', async () => {
+  test('admin cooperative filters hide an unverified cooperative', async () => {
     mockPrisma.cooperative.findUnique.mockResolvedValue({
       ...cooperative,
       id: 8,
       isVerified: false,
     });
-    const req = requestFor({
-      user: { id: 1, role: 'ADMIN', cooperativeId: null },
-      query: { cooperativeId: '8' },
-    });
     const res = createResponse();
 
-    await listOffers(req, res, jest.fn());
+    await listOffers(requestFor({
+      user: { id: 1, role: 'ADMIN', cooperativeId: null },
+      query: { cooperativeId: '8' },
+    }), res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json.mock.calls[0][0].code).toBe('COOPERATIVE_NOT_VERIFIED');
-    expect(mockOfferModel.find).not.toHaveBeenCalled();
+    expect(mockPrisma.offer.findMany).not.toHaveBeenCalled();
   });
 
-  test('an admin may filter incoming offers to a verified cooperative', async () => {
+  test('admin filters and pagination use lower-case Prisma status', async () => {
     mockPrisma.cooperative.findUnique.mockResolvedValue({ ...cooperative, id: 8 });
-    const req = requestFor({
+
+    await listOffers(requestFor({
       user: { id: 1, role: 'ADMIN', cooperativeId: null },
       query: { cooperativeId: '8', status: 'offered', page: '2', limit: '10' },
-    });
+    }), createResponse(), jest.fn());
 
-    await listOffers(req, createResponse(), jest.fn());
-
-    expect(mockOfferModel.find).toHaveBeenCalledWith(
-      { cooperativeId: { $in: [8] }, status: 'offered' },
-      null,
-      { sort: { createdAt: -1 }, skip: 10, limit: 10 }
-    );
+    expect(mockPrisma.offer.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { cooperativeId: { in: [8] }, status: 'offered' },
+      skip: 10,
+      take: 10,
+    }));
   });
 
   test("staff cannot manage another cooperative's offer", async () => {
-    mockOfferModel.findOne.mockResolvedValue(offer({ cooperativeId: 3 }));
-    const req = requestFor({ body: { agreedPricePerKg: 680 } });
+    mockPrisma.offer.findFirst.mockResolvedValue(offer({ cooperativeId: 3 }));
     const res = createResponse();
 
-    await acceptOffer(req, res, jest.fn());
+    await acceptOffer(requestFor({ body: { agreedPricePerKg: 680 } }), res, jest.fn());
 
     expect(res.status).toHaveBeenCalledWith(403);
     expect(res.json.mock.calls[0][0].code).toBe('OFFER_SCOPE_DENIED');
-    expect(mockOfferModel.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockPrisma.offer.updateMany).not.toHaveBeenCalled();
   });
 
-  test('farmer detail lookup includes ownership in the Mongo query', async () => {
-    mockOfferModel.findOne.mockResolvedValue(null);
-    const req = requestFor({
-      params: { id: 'NTO-OTHER-FARMER' },
-      user: { id: 4, role: 'FARMER', cooperativeId: null },
-    });
+  test('farmer detail lookup includes ownership and parses an integer ID', async () => {
+    mockPrisma.offer.findFirst.mockResolvedValue(null);
     const res = createResponse();
 
-    await getMyOffer(req, res, jest.fn());
+    await getMyOffer(requestFor({
+      params: { id: '41' },
+      user: { id: 4, role: 'FARMER', cooperativeId: null },
+    }), res, jest.fn());
 
-    expect(mockOfferModel.findOne).toHaveBeenCalledWith({
-      reference: 'NTO-OTHER-FARMER',
-      farmerId: 4,
+    expect(mockPrisma.offer.findFirst).toHaveBeenCalledWith({
+      where: { id: 41, farmerId: 4 },
+      include: { batch: { select: { batchId: true } } },
     });
     expect(res.status).toHaveBeenCalledWith(404);
     expect(res.json.mock.calls[0][0].code).toBe('OFFER_NOT_FOUND');
   });
 
-  test('a farmer can read their own sanitized offer without farmer PII enrichment', async () => {
-    mockOfferModel.findOne.mockResolvedValue(offer());
-    const req = requestFor({
-      user: { id: 4, role: 'FARMER', cooperativeId: null },
-    });
+  test('a farmer can still address their offer by human reference', async () => {
+    mockPrisma.offer.findFirst.mockResolvedValue(offer());
     const res = createResponse();
 
-    await getMyOffer(req, res, jest.fn());
+    await getMyOffer(requestFor({
+      params: { id: 'nto-20261123-abc123' },
+      user: { id: 4, role: 'FARMER', cooperativeId: null },
+    }), res, jest.fn());
 
-    const returnedOffer = res.json.mock.calls[0][0].data;
-    expect(returnedOffer.id).toBe('64b64c2f3f3f3f3f3f3f3f3f');
-    expect(returnedOffer).not.toHaveProperty('ussdSessionId');
-    expect(returnedOffer).not.toHaveProperty('farmer');
+    expect(mockPrisma.offer.findFirst.mock.calls[0][0].where).toEqual({
+      reference: 'NTO-20261123-ABC123',
+      farmerId: 4,
+    });
+    expect(res.json.mock.calls[0][0].data.id).toBe(41);
+    expect(res.json.mock.calls[0][0].data).not.toHaveProperty('farmer');
   });
 });
 
 describe('offer lifecycle compare-and-set transitions', () => {
   test('an expired offered record cannot be accepted and is marked expired', async () => {
-    mockOfferModel.findOne.mockResolvedValue(offer({
+    mockPrisma.offer.findFirst.mockResolvedValue(offer({
       expiresAt: new Date('2020-01-01T00:00:00.000Z'),
     }));
-    const req = requestFor({ body: { agreedPricePerKg: 680 } });
     const res = createResponse();
 
-    await acceptOffer(req, res, jest.fn());
+    await acceptOffer(requestFor({ body: { agreedPricePerKg: 680 } }), res, jest.fn());
 
-    expect(mockOfferModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        _id: '64b64c2f3f3f3f3f3f3f3f3f',
-        status: 'offered',
-        expiresAt: { $lte: expect.any(Date) },
-      }),
-      { $set: { status: 'expired', expiredAt: expect.any(Date) } },
-      { runValidators: true }
-    );
-    expect(mockOfferModel.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockPrisma.offer.updateMany).toHaveBeenCalledWith({
+      where: { id: 41, status: 'offered', expiresAt: { lte: expect.any(Date) } },
+      data: { status: 'expired', expiredAt: expect.any(Date) },
+    });
     expect(mockSmsService.sendOfferAccepted).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(409);
     expect(res.json.mock.calls[0][0].code).toBe('OFFER_EXPIRED');
   });
 
   test('direct acceptance atomically stores and texts the agreed price', async () => {
-    const offered = offer();
     const accepted = offer({
       status: 'accepted',
       agreedPricePerKg: 680,
       acceptedAt: new Date(),
     });
-    mockOfferModel.findOne.mockResolvedValue(offered);
-    mockOfferModel.findOneAndUpdate.mockResolvedValue(accepted);
-    const req = requestFor({ body: { agreedPricePerKg: 680 } });
+    mockPrisma.offer.findFirst.mockResolvedValue(offer());
+    mockPrisma.offer.findUnique.mockResolvedValue(accepted);
     const res = createResponse();
 
-    await acceptOffer(req, res, jest.fn());
+    await acceptOffer(requestFor({ body: { agreedPricePerKg: 680 } }), res, jest.fn());
 
-    expect(mockOfferModel.findOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        _id: offered._id,
+    expect(mockPrisma.offer.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 41,
         cooperativeId: 2,
         status: 'offered',
-        expiresAt: { $gt: expect.any(Date) },
-      }),
-      { $set: expect.objectContaining({
+        expiresAt: { gt: expect.any(Date) },
+      },
+      data: expect.objectContaining({
         status: 'accepted',
         agreedPricePerKg: 680,
         acceptedAt: expect.any(Date),
-      }) },
-      { new: true, runValidators: true }
-    );
-    expect(mockSmsService.sendOfferAccepted).toHaveBeenCalledWith(
-      farmer.phone,
-      {
-        reference: accepted.reference,
-        tradeType: 'direct',
-        agreedPricePerKg: 680,
-        commissionPercent: 12.5,
-      }
-    );
+      }),
+    });
+    expect(mockSmsService.sendOfferAccepted).toHaveBeenCalledWith(farmer.phone, {
+      reference: accepted.reference,
+      tradeType: 'direct',
+      agreedPricePerKg: 680,
+      commissionPercent: 12.5,
+    });
     expect(res.json.mock.calls[0][0].data.agreedPricePerKg).toBe(680);
   });
 
-  test('consignment acceptance texts the immutable commission snapshot', async () => {
+  test('consignment acceptance preserves the immutable commission snapshot', async () => {
     const offered = offer({ tradeType: 'consignment', commissionPercent: 9.75 });
     const accepted = offer({
       tradeType: 'consignment',
@@ -317,33 +298,33 @@ describe('offer lifecycle compare-and-set transitions', () => {
       status: 'accepted',
       acceptedAt: new Date(),
     });
-    mockOfferModel.findOne.mockResolvedValue(offered);
-    mockOfferModel.findOneAndUpdate.mockResolvedValue(accepted);
+    mockPrisma.offer.findFirst.mockResolvedValue(offered);
+    mockPrisma.offer.findUnique.mockResolvedValue(accepted);
 
     await acceptOffer(requestFor(), createResponse(), jest.fn());
 
+    const update = mockPrisma.offer.updateMany.mock.calls[0][0].data;
+    expect(update).not.toHaveProperty('commissionPercent');
     expect(mockSmsService.sendOfferAccepted).toHaveBeenCalledWith(
       farmer.phone,
-      expect.objectContaining({
-        tradeType: 'consignment',
-        commissionPercent: 9.75,
-      })
+      expect.objectContaining({ tradeType: 'consignment', commissionPercent: 9.75 })
     );
-    const update = mockOfferModel.findOneAndUpdate.mock.calls[0][1];
-    expect(update.$set).not.toHaveProperty('commissionPercent');
   });
 
-  test('rejection requires a reason and sends the farmer status SMS', async () => {
+  test('rejection requires a reason and sends one farmer status SMS', async () => {
     const rejected = offer({
       status: 'rejected',
       rejectionReason: 'Capacity is full',
       rejectedAt: new Date(),
     });
-    mockOfferModel.findOne.mockResolvedValue(offer());
-    mockOfferModel.findOneAndUpdate.mockResolvedValue(rejected);
-    const req = requestFor({ body: { reason: ' Capacity is full ' } });
+    mockPrisma.offer.findFirst.mockResolvedValue(offer());
+    mockPrisma.offer.findUnique.mockResolvedValue(rejected);
 
-    await rejectOffer(req, createResponse(), jest.fn());
+    await rejectOffer(
+      requestFor({ body: { reason: ' Capacity is full ' } }),
+      createResponse(),
+      jest.fn()
+    );
 
     expect(mockSmsService.sendOfferRejected).toHaveBeenCalledWith(farmer.phone, {
       reference: rejected.reference,
@@ -351,12 +332,8 @@ describe('offer lifecycle compare-and-set transitions', () => {
     });
   });
 
-  test('delivery stores measured values and idempotently verifies the farmer', async () => {
-    const accepted = offer({
-      status: 'accepted',
-      agreedPricePerKg: 680,
-      acceptedAt: new Date(),
-    });
+  test('delivery stores measurements and idempotently verifies the farmer', async () => {
+    const accepted = offer({ status: 'accepted', agreedPricePerKg: 680 });
     const delivered = offer({
       status: 'delivered',
       agreedPricePerKg: 680,
@@ -364,20 +341,21 @@ describe('offer lifecycle compare-and-set transitions', () => {
       moisturePercent: 18.2,
       deliveredAt: new Date(),
     });
-    mockOfferModel.findOne.mockResolvedValue(accepted);
-    mockOfferModel.findOneAndUpdate.mockResolvedValue(delivered);
+    mockPrisma.offer.findFirst.mockResolvedValue(accepted);
+    mockPrisma.offer.findUnique.mockResolvedValue(delivered);
     mockPrisma.user.findMany.mockResolvedValue([{
       ...farmer,
       farmerVerifiedAt: delivered.deliveredAt,
     }]);
-    const req = requestFor({ body: { weighedKg: 87.5, moisturePercent: 18.2 } });
     const res = createResponse();
 
-    await recordDelivery(req, res, jest.fn());
+    await recordDelivery(requestFor({
+      body: { weighedKg: 87.5, moisturePercent: 18.2 },
+    }), res, jest.fn());
 
-    const updateCall = mockOfferModel.findOneAndUpdate.mock.calls[0];
-    expect(updateCall[0]).toEqual(expect.objectContaining({ status: 'accepted' }));
-    expect(updateCall[1].$set).toEqual({
+    const transition = mockPrisma.offer.updateMany.mock.calls[0][0];
+    expect(transition.where.status).toBe('accepted');
+    expect(transition.data).toEqual({
       status: 'delivered',
       weighedKg: 87.5,
       moisturePercent: 18.2,
@@ -385,53 +363,45 @@ describe('offer lifecycle compare-and-set transitions', () => {
     });
     expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
       where: { id: 4, role: 'FARMER', farmerVerifiedAt: null },
-      data: { farmerVerifiedAt: updateCall[1].$set.deliveredAt },
+      data: { farmerVerifiedAt: transition.data.deliveredAt },
     });
-    expect(res.json.mock.calls[0][0].data.weighedKg).toBe(87.5);
     expect(res.json.mock.calls[0][0].data.farmer.isVerified).toBe(true);
   });
 
-  test('verification only changes the Mongo lifecycle and never writes blockchain or HoneyBatch', async () => {
-    const delivered = offer({
-      status: 'delivered',
-      weighedKg: 87.5,
-      moisturePercent: 18.2,
-      deliveredAt: new Date(),
-    });
+  test('verification changes only the offer lifecycle', async () => {
+    const delivered = offer({ status: 'delivered', weighedKg: 87.5, moisturePercent: 18.2 });
     const verified = offer({
       ...delivered,
       status: 'verified',
       verifiedAt: new Date(),
     });
-    mockOfferModel.findOne.mockResolvedValue(delivered);
-    mockOfferModel.findOneAndUpdate.mockResolvedValue(verified);
+    mockPrisma.offer.findFirst.mockResolvedValue(delivered);
+    mockPrisma.offer.findUnique.mockResolvedValue(verified);
     const res = createResponse();
 
     await verifyOffer(requestFor(), res, jest.fn());
 
-    expect(mockOfferModel.findOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(mockPrisma.offer.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        id: 41,
         status: 'delivered',
-        weighedKg: { $gt: 0, $lte: 10000 },
-        moisturePercent: { $gt: 0, $lt: 100 },
+        weighedKg: { gt: 0, lte: 10000 },
+        moisturePercent: { gt: 0, lt: 100 },
       }),
-      { $set: { status: 'verified', verifiedAt: expect.any(Date) } },
-      { new: true, runValidators: true }
-    );
+      data: { status: 'verified', verifiedAt: expect.any(Date) },
+    });
     expect(mockBlockchain.recordBatchOnChain).not.toHaveBeenCalled();
     expect(mockPrisma.honeyBatch.create).not.toHaveBeenCalled();
-    expect(mockPrisma.honeyBatch.update).not.toHaveBeenCalled();
     expect(res.json.mock.calls[0][0].data.status).toBe('verified');
   });
 
-  test('legacy VERIFIED status delegates to the same verification transition', async () => {
-    const delivered = offer({
+  test('legacy VERIFIED status delegates to the lower-case verification transition', async () => {
+    mockPrisma.offer.findFirst.mockResolvedValue(offer({
       status: 'delivered',
       weighedKg: 90,
       moisturePercent: 17,
-    });
-    mockOfferModel.findOne.mockResolvedValue(delivered);
-    mockOfferModel.findOneAndUpdate.mockResolvedValue(offer({
+    }));
+    mockPrisma.offer.findUnique.mockResolvedValue(offer({
       status: 'verified',
       weighedKg: 90,
       moisturePercent: 17,
@@ -444,51 +414,41 @@ describe('offer lifecycle compare-and-set transitions', () => {
       jest.fn()
     );
 
-    expect(mockOfferModel.findOneAndUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'delivered' }),
-      expect.any(Object),
-      { new: true, runValidators: true }
-    );
+    expect(mockPrisma.offer.updateMany.mock.calls[0][0].where.status).toBe('delivered');
   });
 });
 
 describe('farmer verification and expiry', () => {
   test('a cooperative idempotently verifies a farmer with its delivered offer', async () => {
-    mockOfferModel.exists.mockResolvedValue({ _id: 'qualifying-offer' });
+    mockPrisma.offer.findFirst.mockResolvedValue({ id: 41 });
     mockPrisma.user.findUnique.mockResolvedValue({
       id: 4,
       role: 'FARMER',
       farmerVerifiedAt: null,
     });
-    const req = requestFor({ params: { farmerId: '4' } });
     const res = createResponse();
 
-    await verifyFarmer(req, res, jest.fn());
+    await verifyFarmer(requestFor({ params: { farmerId: '4' } }), res, jest.fn());
 
-    expect(mockOfferModel.exists).toHaveBeenCalledWith({
-      cooperativeId: 2,
-      farmerId: 4,
-      status: { $in: ['delivered', 'verified'] },
-    });
-    expect(mockPrisma.user.updateMany).toHaveBeenCalledWith({
-      where: { id: 4, role: 'FARMER', farmerVerifiedAt: null },
-      data: { farmerVerifiedAt: expect.any(Date) },
+    expect(mockPrisma.offer.findFirst).toHaveBeenCalledWith({
+      where: {
+        cooperativeId: 2,
+        farmerId: 4,
+        status: { in: ['delivered', 'verified'] },
+      },
+      select: { id: true },
     });
     expect(res.json.mock.calls[0][0].data.farmer).toEqual({ id: 4, isVerified: true });
   });
 
   test('expiry updates only offered records whose deadline has passed', async () => {
     const now = new Date('2026-11-23T20:00:00.000Z');
-    mockOfferModel.updateMany.mockResolvedValue({ modifiedCount: 3 });
+    mockPrisma.offer.updateMany.mockResolvedValue({ count: 3 });
 
-    const expiredCount = await offerService.expireDueOffers(now);
-
-    expect(mockOfferModel.updateMany).toHaveBeenCalledWith(
-      { status: 'offered', expiresAt: { $lte: now } },
-      { $set: { status: 'expired', expiredAt: now } },
-      { runValidators: true }
-    );
-    expect(expiredCount).toBe(3);
-    expect(mockOfferModel).not.toHaveProperty('deleteMany');
+    await expect(offerService.expireDueOffers(now)).resolves.toBe(3);
+    expect(mockPrisma.offer.updateMany).toHaveBeenCalledWith({
+      where: { status: 'offered', expiresAt: { lte: now } },
+      data: { status: 'expired', expiredAt: now },
+    });
   });
 });

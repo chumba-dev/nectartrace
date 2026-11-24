@@ -1,105 +1,86 @@
-const Offer = require('../src/models/Offer');
+const fs = require('fs');
+const path = require('path');
 
-function validOffer(overrides = {}) {
-  return new Offer({
-    farmerId: 4,
-    cooperativeId: 2,
-    ward: 'Kabarnet',
-    offeredKg: 50,
-    expectedPricePerKg: 0,
-    tradeType: 'consignment',
-    commissionPercent: 12.5,
-    reference: 'NTO-20261123-ABC123',
-    ussdSessionId: 'session-private',
-    ...overrides,
-  });
+const backendRoot = path.join(__dirname, '..');
+const schema = fs.readFileSync(path.join(backendRoot, 'prisma', 'schema.prisma'), 'utf8');
+const migration = fs.readFileSync(path.join(
+  backendRoot,
+  'prisma',
+  'migrations',
+  '20261124093000_postgresql_offers_and_payments',
+  'migration.sql'
+), 'utf8');
+
+function modelBlock(name) {
+  const match = schema.match(new RegExp(`model ${name} \\{([\\s\\S]*?)\\n\\}`));
+  if (!match) throw new Error(`Missing ${name} model`);
+  return match[1];
 }
 
-test('Offer defaults to the lower-case offered lifecycle and expires after 48 hours', async () => {
-  const offer = validOffer();
+test('Offer maps the existing table, legacy columns, lower-case enums, and integer key', () => {
+  const offer = modelBlock('Offer');
 
-  await expect(offer.validate()).resolves.toBeUndefined();
-  expect(offer.status).toBe('offered');
-  expect(offer.expiresAt.getTime() - offer.offeredAt.getTime()).toBe(48 * 60 * 60 * 1000);
-  expect(Offer.schema.path('status').enumValues).toEqual([
-    'offered',
-    'accepted',
-    'rejected',
-    'expired',
-    'delivered',
-    'verified',
-    'paid',
-  ]);
+  expect(schema).toMatch(/enum OfferStatus \{[\s\S]*offered\s+@map\("SUBMITTED"\)/);
+  expect(schema).toMatch(/delivered\s+@map\("RECEIVED"\)/);
+  expect(schema).toMatch(/enum TradeType \{[\s\S]*direct\s+@map\("DIRECT_PURCHASE"\)/);
+  expect(offer).toMatch(/id\s+Int\s+@id @default\(autoincrement\(\)\)/);
+  expect(offer).toMatch(/ward\s+String\s+@map\("pickupVillage"\)/);
+  expect(offer).toMatch(/offeredKg\s+Decimal\s+@map\("offeredWeightKg"\)/);
+  expect(offer).toMatch(/weighedKg\s+Decimal\?\s+@map\("acceptedWeightKg"\)/);
+  expect(offer).toMatch(/batchId\s+Int\?\s+@map\("honeyBatchId"\)/);
+  expect(offer).toContain('@@map("HarvestOffer")');
 });
 
-test.each([
-  ['offeredKg', 0],
-  ['offeredKg', 10000.01],
-  ['expectedPricePerKg', -1],
-  ['commissionPercent', -0.1],
-  ['commissionPercent', 100.1],
-  ['agreedPricePerKg', -1],
-  ['weighedKg', 0],
-  ['weighedKg', 10001],
-  ['moisturePercent', 0],
-  ['moisturePercent', 100],
-  ['saleAmount', -1],
-  ['farmerId', 1.5],
-  ['cooperativeId', 0],
-])('Offer rejects invalid %s value %p', async (field, value) => {
-  let validation;
-  try {
-    await validOffer({ [field]: value }).validate();
-  } catch (err) {
-    validation = err;
+test('Offer declares lifecycle, privacy-sensitive storage, relations, and query indexes', () => {
+  const offer = modelBlock('Offer');
+
+  for (const field of [
+    'commissionPercent',
+    'expiresAt',
+    'moisturePercent',
+    'saleAmount',
+    'paymentDetailsConfirmedAt',
+    'batchReservationToken',
+    'offeredAt',
+    'acceptedAt',
+    'rejectedAt',
+    'expiredAt',
+    'deliveredAt',
+    'verifiedAt',
+    'paidAt',
+  ]) {
+    expect(offer).toMatch(new RegExp(`\\b${field}\\b`));
   }
-
-  expect(validation?.errors[field]).toBeDefined();
+  expect(offer).toContain('payments         Payment[]');
+  expect(offer).toContain('@@index([cooperativeId, status, expiresAt])');
+  expect(offer).toContain('@@index([cooperativeId, status, batchId])');
+  expect(modelBlock('HoneyBatch')).toContain('offers      Offer[]');
+  expect(modelBlock('User')).toContain('offers                 Offer[]');
+  expect(modelBlock('Cooperative')).toContain('offers            Offer[]');
 });
 
-test('commissionPercent remains immutable after creation', () => {
-  const offer = validOffer({ commissionPercent: 8 });
-  offer.$isNew = false;
+test('incremental migration backfills required offer values before constraints', () => {
+  const backfill = migration.indexOf('UPDATE "HarvestOffer"\nSET');
+  const constraints = migration.indexOf('ALTER COLUMN "commissionPercent" SET NOT NULL');
 
-  offer.commissionPercent = 20;
-
-  expect(offer.commissionPercent).toBe(8);
+  expect(backfill).toBeGreaterThan(-1);
+  expect(constraints).toBeGreaterThan(backfill);
+  expect(migration).toContain('"expiresAt" = "createdAt" + INTERVAL \'48 hours\'');
+  expect(migration).toContain('DROP INDEX IF EXISTS "HarvestOffer_honeyBatchId_key"');
+  expect(migration).not.toMatch(/DROP TABLE\s+"HarvestOffer"/);
+  expect(migration).not.toMatch(/DROP COLUMN\s+"(pickupVillage|offeredWeightKg|acceptedWeightKg)"/);
 });
 
-test('Offer JSON never exposes the USSD session identifier', () => {
-  const json = validOffer({
-    batchId: 'BAR-2026-001',
-    batchReservationToken: '11111111-1111-4111-8111-111111111111',
-  }).toJSON();
+test('legacy document-store dependency and runtime configuration are absent', () => {
+  const packageJson = require('../package.json');
+  const dependencyName = ['m', 'o', 'n', 'g', 'o', 'o', 's', 'e'].join('');
+  const uriName = ['M', 'O', 'N', 'G', 'O', 'D', 'B', '_URI'].join('');
+  const oldConfigName = ['mon', 'go.js'].join('');
+  const envExample = fs.readFileSync(path.join(backendRoot, '.env.example'), 'utf8');
 
-  expect(json.id).toBeDefined();
-  expect(json).not.toHaveProperty('_id');
-  expect(json).not.toHaveProperty('__v');
-  expect(json).not.toHaveProperty('ussdSessionId');
-  expect(json).not.toHaveProperty('batchReservationToken');
-  expect(Offer.schema.path('paymentDetailsConfirmedAt')).toBeDefined();
-  expect(Offer.schema.paths).not.toHaveProperty('mpesaNumber');
-  expect(Offer.schema.paths).not.toHaveProperty('pin');
-});
-
-test('Offer declares the lifecycle query and farmer history indexes', () => {
-  const indexes = Offer.schema.indexes().map(([definition]) => definition);
-
-  expect(indexes).toContainEqual({ cooperativeId: 1, status: 1, expiresAt: 1 });
-  expect(indexes).toContainEqual({ cooperativeId: 1, status: 1, batchId: 1 });
-  expect(indexes).toContainEqual({ farmerId: 1, createdAt: -1 });
-  expect(indexes).toContainEqual({ ussdSessionId: 1 });
-  expect(indexes).toContainEqual({ reference: 1 });
-});
-
-test('Offer validates final batch IDs and request-scoped reservation tokens', async () => {
-  await expect(validOffer({
-    batchId: 'BAR-2026-001',
-    batchReservationToken: '11111111-1111-4111-8111-111111111111',
-  }).validate()).resolves.toBeUndefined();
-
-  await expect(validOffer({ batchId: 'temporary-or-invalid' }).validate())
-    .rejects.toMatchObject({ name: 'ValidationError' });
-  await expect(validOffer({ batchReservationToken: 'not-a-uuid' }).validate())
-    .rejects.toMatchObject({ name: 'ValidationError' });
+  expect(packageJson.dependencies).not.toHaveProperty(dependencyName);
+  expect(envExample).not.toContain(uriName);
+  expect(fs.existsSync(path.join(backendRoot, 'src', 'config', oldConfigName))).toBe(false);
+  expect(fs.existsSync(path.join(backendRoot, 'src', 'models', 'Offer.js'))).toBe(false);
+  expect(fs.existsSync(path.join(backendRoot, 'src', 'models', 'Payment.js'))).toBe(false);
 });

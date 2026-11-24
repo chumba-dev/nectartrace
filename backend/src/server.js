@@ -2,7 +2,6 @@ const app = require('./app');
 const prisma = require('./config/db');
 const logger = require('./utils/logger');
 const env = require('./config/env');
-const { connectMongo, disconnectMongo } = require('./config/mongo');
 const {
   startExpireOffersJob,
   stopExpireOffersJob,
@@ -14,8 +13,6 @@ async function start() {
     await prisma.$connect();
     logger.info('✅ Database connected');
 
-    await connectMongo();
-    logger.info('MongoDB connected');
     startExpireOffersJob();
 
     // Start server
@@ -33,10 +30,7 @@ async function start() {
       logger.info(`${signal} received — shutting down gracefully...`);
       stopExpireOffersJob();
       server.close(async () => {
-        await Promise.allSettled([
-          prisma.$disconnect(),
-          disconnectMongo(),
-        ]);
+        await prisma.$disconnect();
         logger.info('✅ Server closed');
         process.exit(0);
       });
@@ -46,10 +40,7 @@ async function start() {
     process.on('SIGINT', () => shutdown('SIGINT'));
   } catch (err) {
     stopExpireOffersJob();
-    await Promise.allSettled([
-      prisma.$disconnect(),
-      disconnectMongo(),
-    ]);
+    await prisma.$disconnect().catch(() => {});
     logger.error('Failed to start server', { error: err.message });
     process.exit(1);
   }

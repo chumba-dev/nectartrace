@@ -106,7 +106,7 @@ test('manual ABI exposes only aggregate batch fields and the lot commitment', ()
   expect(eventSignature).toContain('uint256 weightGrams');
   expect(eventSignature).toContain('bytes32 lotIdsHash');
   expect(`${recordSignature} ${eventSignature}`).not.toMatch(
-    /farmer|user|phone|mpesa|payment|offer|mongo/i
+    /farmer|user|phone|mpesa|payment|offer|reservation/i
   );
 });
 
@@ -133,7 +133,7 @@ test('batch writes send the commitment and no raw lot or identity data', async (
     mockLotIdsHash
   );
   const serializedArgs = JSON.stringify(mockWriteContract.recordBatch.mock.calls[0]);
-  expect(serializedArgs).not.toMatch(/farmer|user|phone|mpesa|payment|offer|mongo/i);
+  expect(serializedArgs).not.toMatch(/farmer|user|phone|mpesa|payment|offer|reservation/i);
   expect(serializedArgs).not.toContain('64b64c2f3f3f3f3f3f3f3f3f');
 });
 

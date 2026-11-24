@@ -7,10 +7,10 @@ This repository is a final-year Computer Science project by Collins Kiprop Chumb
 ## Architecture
 
 - `frontend/`: React 19, Vite, React Router, TanStack Query, Tailwind CSS.
-- `backend/`: Node.js 20, Express, Prisma/PostgreSQL, Mongoose/MongoDB, Africa's Talking, Google Identity, SMTP, and Daraja Sandbox.
+- `backend/`: Node.js 20, Express, Prisma/PostgreSQL, Africa's Talking, Google Identity, SMTP, and Daraja Sandbox.
 - `blockchain/`: Solidity 0.8.19, Hardhat, OpenZeppelin AccessControl, and Polygon Amoy.
 
-PostgreSQL stores users, cooperatives, batches, listings, orders, USSD sessions, harvest logs, and SMS logs. MongoDB stores farmer offers/lots and the immutable payout ledger. The blockchain stores batch-level provenance plus a commitment hash of the contributing Mongo lot IDs. Farmer identity, phone, PIN, M-Pesa, offer, and payment data never go on-chain.
+PostgreSQL is authoritative for users, cooperatives, offers/lots, payout ledgers, batches, listings, orders, USSD sessions, harvest logs, and SMS logs. The blockchain stores batch-level provenance plus a commitment hash of the contributing integer offer IDs. Farmer identity, phone, PIN, M-Pesa, offer, and payment data never go on-chain.
 
 ## Core Lifecycle
 
@@ -19,14 +19,13 @@ PostgreSQL stores users, cooperatives, batches, listings, orders, USSD sessions,
 3. The cooperative accepts or rejects. Direct purchases include an agreed price; consignments snapshot the cooperative commission.
 4. On delivery, staff record actual weighed kilograms and moisture. Payment calculations use weighed kilograms, never offered kilograms.
 5. Staff verify the measured lot. Verified lots can be aggregated into one batch.
-6. The backend sorts the selected Mongo ObjectIds, joins them with a newline, and computes `keccak256` over the UTF-8 bytes. Only this lot commitment and batch details are recorded on-chain.
+6. The backend validates positive safe-integer offer IDs, sorts them numerically, converts them to canonical base-10 strings, joins them with a newline, and computes `keccak256` over the UTF-8 bytes. Only this lot commitment and batch details are recorded on-chain.
 7. Direct purchases or sold consignments create one idempotent Daraja B2C Sandbox payout ledger entry.
 
 ## Prerequisites
 
 - Node.js 20.19 or newer in the Node 20 release line.
 - PostgreSQL 16.
-- MongoDB 7 or MongoDB Atlas.
 - Africa's Talking Sandbox credentials for USSD/SMS testing.
 - Daraja Sandbox B2C credentials for payout testing.
 - Polygon Amoy RPC access and a funded test wallet.
@@ -62,7 +61,9 @@ For the existing deployed PostgreSQL database, apply pending migrations:
 npx prisma migrate deploy
 ```
 
-The repository currently contains incremental migrations but no original baseline migration. For a new disposable development database, use `npx prisma db push` until a production-safe baseline migration is established.
+The repository contains incremental migrations but no original baseline migration. The offer/payment migration reuses the existing `HarvestOffer` table, preserves its integer IDs and legacy columns, backfills required lifecycle values before adding constraints, changes the batch relation from one-to-one to many-to-one, and creates `Payment`. The retired payout table remains present only for compatibility. Review and back up an existing database before deployment. For a new disposable development database, use `npx prisma db push` until a production-safe baseline migration is established.
+
+There is no offer data-import step from another datastore. Offer and payment records are managed only through Prisma after this migration.
 
 Seed development identities and a verified cooperative:
 
@@ -80,7 +81,6 @@ Production seeding refuses to use development default credentials.
 See `backend/.env.example` for the complete list. The major groups are:
 
 - PostgreSQL: `DATABASE_URL`.
-- MongoDB: `MONGODB_URI`.
 - Authentication: `JWT_SECRET`, Google Client ID, SMTP settings.
 - Africa's Talking: API key, username, shortcode, optional approved sender ID.
 - Blockchain: Amoy RPC URL, relayer private key, v2 contract address.
@@ -177,7 +177,7 @@ The test suite covers opt-in, cooperative filtering, kilogram validation, USSD p
 
 ## Deployment Order
 
-1. Provision PostgreSQL and MongoDB.
+1. Provision PostgreSQL.
 2. Apply Prisma migrations and configure seed/manual admin credentials.
 3. Deploy HoneyBatch v2 to Amoy and update `CONTRACT_ADDRESS`.
 4. Configure backend environment variables and deploy the API.

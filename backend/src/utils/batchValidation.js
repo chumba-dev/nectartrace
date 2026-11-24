@@ -1,5 +1,4 @@
 const BATCH_ID_PATTERN = /^BAR-\d{4}-\d{3}$/;
-const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
 const { computeLotIdsHash } = require('./lotIdsHash');
 
 function parseHarvestDate(value) {
@@ -42,13 +41,17 @@ function validateBatchInput(input) {
   }
 
   if (!Array.isArray(input.offerIds) || input.offerIds.length === 0) {
-    return { error: 'offerIds must be a nonempty array of Mongo Offer ObjectIds' };
+    return { error: 'offerIds must be a nonempty array of positive integer Offer IDs' };
   }
-  const offerIds = Array.from(input.offerIds, (value) => (
-    typeof value === 'string' ? value.trim().toLowerCase() : ''
-  ));
-  if (offerIds.some((value) => !OBJECT_ID_PATTERN.test(value))) {
-    return { error: 'offerIds must contain only 24-character Mongo ObjectId strings' };
+  const offerIds = Array.from(input.offerIds, (value) => {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string' && /^[1-9]\d*$/.test(value.trim())) {
+      return Number(value.trim());
+    }
+    return NaN;
+  });
+  if (offerIds.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+    return { error: 'offerIds must contain only positive safe integer Offer IDs' };
   }
   try {
     computeLotIdsHash(offerIds);

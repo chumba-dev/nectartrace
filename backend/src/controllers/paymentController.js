@@ -17,10 +17,7 @@ function handlePaymentError(err, res, next) {
       code: err.code,
     });
   }
-  if (err?.name === 'ValidationError' || err?.name === 'CastError') {
-    return res.status(400).json({ success: false, message: 'Invalid payment data' });
-  }
-  if (err?.code === 11000) {
+  if (err?.code === 'P2002') {
     return res.status(409).json({ success: false, message: 'Payment already exists' });
   }
   return next(err);
@@ -29,7 +26,7 @@ function handlePaymentError(err, res, next) {
 async function initiateOfferPayout(req, res, next) {
   try {
     const result = await paymentService.initiatePayout({
-      offerIdentifier: req.params.offerId,
+      offerIdentifier: paymentService.normalizeOfferIdentifier(req.params.offerId),
       user: req.user,
       reference: req.body?.reference,
     });
@@ -49,7 +46,7 @@ async function initiateOfferPayout(req, res, next) {
 async function confirmOfferPaymentDetails(req, res, next) {
   try {
     const confirmation = await paymentService.confirmPaymentDetails({
-      offerIdentifier: req.params.offerId,
+      offerIdentifier: paymentService.normalizeOfferIdentifier(req.params.offerId),
       farmerId: req.user.id,
       pin: req.body?.pin,
     });
@@ -66,7 +63,7 @@ async function confirmOfferPaymentDetails(req, res, next) {
 async function getOfferPayment(req, res, next) {
   try {
     const payment = await paymentService.getOfferPayment({
-      offerIdentifier: req.params.offerId,
+      offerIdentifier: paymentService.normalizeOfferIdentifier(req.params.offerId),
       user: req.user,
     });
     return res.json({ success: true, data: payment });

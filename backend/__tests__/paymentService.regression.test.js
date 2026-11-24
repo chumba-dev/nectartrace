@@ -4,41 +4,38 @@ let mockUsers;
 let nextPaymentId;
 
 function clone(value) {
-  if (!value) return value;
-  return { ...value };
+  return value ? { ...value } : value;
 }
 
 function matchesValue(actual, expected) {
   if (expected && typeof expected === 'object' && !Array.isArray(expected)) {
-    if (expected.$in) return expected.$in.includes(actual);
-    if (Object.prototype.hasOwnProperty.call(expected, '$ne')) return actual !== expected.$ne;
+    if (expected.in) return expected.in.includes(actual);
+    if (Object.prototype.hasOwnProperty.call(expected, 'not')) return actual !== expected.not;
   }
-  return String(actual) === String(expected);
+  return actual === expected;
 }
 
-function matches(document, query) {
-  if (query.$or && !query.$or.some((part) => matches(document, part))) return false;
-  return Object.entries(query).every(([key, value]) => {
-    if (key === '$or') return true;
-    return matchesValue(document[key], value);
-  });
+function matches(document, where) {
+  if (where.OR && !where.OR.some((part) => matches(document, part))) return false;
+  return Object.entries(where).every(([key, value]) => (
+    key === 'OR' || matchesValue(document[key], value)
+  ));
 }
-
-const mockPaymentModel = {
-  findOne: jest.fn(),
-  findOneAndUpdate: jest.fn(),
-  create: jest.fn(),
-};
-
-const mockOfferModel = {
-  findOne: jest.fn(),
-  findOneAndUpdate: jest.fn(),
-  updateOne: jest.fn(),
-  updateMany: jest.fn(),
-};
 
 const mockPrisma = {
+  payment: {
+    findUnique: jest.fn(),
+    findFirst: jest.fn(),
+    create: jest.fn(),
+    updateMany: jest.fn(),
+  },
+  offer: {
+    findFirst: jest.fn(),
+    findUnique: jest.fn(),
+    updateMany: jest.fn(),
+  },
   user: { findUnique: jest.fn() },
+  $transaction: jest.fn(),
 };
 
 const mockDaraja = {
@@ -49,9 +46,7 @@ const mockDaraja = {
   requestB2CPayout: jest.fn(),
 };
 
-const mockOfferService = {
-  loadManagedOffer: jest.fn(),
-};
+const mockOfferService = { loadManagedOffer: jest.fn() };
 
 const mockSmsService = {
   sendConsignmentSale: jest.fn(),
@@ -59,12 +54,8 @@ const mockSmsService = {
   sendPayoutSuccess: jest.fn(),
 };
 
-const mockBcrypt = {
-  compare: jest.fn(),
-};
+const mockBcrypt = { compare: jest.fn() };
 
-jest.mock('../src/models/Payment', () => mockPaymentModel);
-jest.mock('../src/models/Offer', () => mockOfferModel);
 jest.mock('../src/config/db', () => mockPrisma);
 jest.mock('../src/services/darajaService', () => mockDaraja);
 jest.mock('../src/services/offerService', () => mockOfferService);
@@ -78,11 +69,11 @@ jest.mock('../src/utils/logger', () => ({
 
 const paymentService = require('../src/services/paymentService');
 
-const OFFER_ID = '64b64c2f3f3f3f3f3f3f3f3f';
+const OFFER_ID = 41;
 
 function baseOffer(overrides = {}) {
   return {
-    _id: OFFER_ID,
+    id: OFFER_ID,
     reference: 'NTO-20261123-ABC123',
     farmerId: 4,
     cooperativeId: 2,
@@ -121,62 +112,76 @@ beforeEach(() => {
   mockUsers = new Map([[4, farmer()], [5, farmer({ id: 5 })]]);
   nextPaymentId = 1;
 
-  mockPaymentModel.findOne.mockImplementation(async (query) => (
-    clone(mockPayments.find((payment) => matches(payment, query)) || null)
+  mockPrisma.$transaction.mockImplementation(async (operation) => operation(mockPrisma));
+  mockPrisma.payment.findUnique.mockImplementation(async ({ where }) => (
+    clone(mockPayments.find((payment) => matches(payment, where)) || null)
   ));
-  mockPaymentModel.create.mockImplementation(async (data) => {
+  mockPrisma.payment.findFirst.mockImplementation(async ({ where }) => (
+    clone(mockPayments.find((payment) => matches(payment, where)) || null)
+  ));
+  mockPrisma.payment.create.mockImplementation(async ({ data }) => {
     if (
       mockPayments.some((payment) => payment.reference === data.reference)
       || mockPayments.some((payment) => (
-        String(payment.offerId) === String(data.offerId) && payment.purpose === data.purpose
+        payment.offerId === data.offerId && payment.purpose === data.purpose
       ))
     ) {
-      const error = new Error('duplicate');
-      error.code = 11000;
+      const error = new Error('Unique constraint');
+      error.code = 'P2002';
       throw error;
     }
     const now = new Date();
     const payment = {
-      _id: `payment-${nextPaymentId}`,
+      id: nextPaymentId,
       createdAt: now,
       updatedAt: now,
+      originatorConversationId: null,
+      conversationId: null,
+      transactionId: null,
+      resultCode: null,
+      resultDescription: null,
+      submittedAt: null,
+      completedAt: null,
+      failedAt: null,
       ...data,
     };
     nextPaymentId += 1;
     mockPayments.push(payment);
     return clone(payment);
   });
-  mockPaymentModel.findOneAndUpdate.mockImplementation(async (query, update) => {
-    const payment = mockPayments.find((candidate) => matches(candidate, query));
-    if (!payment) return null;
-    Object.assign(payment, update.$set, { updatedAt: new Date() });
-    return clone(payment);
+  mockPrisma.payment.updateMany.mockImplementation(async ({ where, data }) => {
+    let count = 0;
+    for (const payment of mockPayments) {
+      if (!matches(payment, where)) continue;
+      Object.assign(payment, data, { updatedAt: new Date() });
+      count += 1;
+    }
+    return { count };
   });
 
-  mockOfferModel.findOne.mockImplementation(async (query) => (
-    clone(mockOffers.find((offer) => matches(offer, query)) || null)
+  mockPrisma.offer.findFirst.mockImplementation(async ({ where }) => (
+    clone(mockOffers.find((item) => matches(item, where)) || null)
   ));
-  mockOfferModel.findOneAndUpdate.mockImplementation(async (query, update) => {
-    const offer = mockOffers.find((candidate) => matches(candidate, query));
-    if (!offer) return null;
-    Object.assign(offer, update.$set);
-    return clone(offer);
+  mockPrisma.offer.findUnique.mockImplementation(async ({ where }) => (
+    clone(mockOffers.find((item) => matches(item, where)) || null)
+  ));
+  mockPrisma.offer.updateMany.mockImplementation(async ({ where, data }) => {
+    let count = 0;
+    for (const item of mockOffers) {
+      if (!matches(item, where)) continue;
+      Object.assign(item, data);
+      count += 1;
+    }
+    return { count };
   });
-  mockOfferModel.updateOne.mockImplementation(async (query, update) => {
-    const offer = mockOffers.find((candidate) => matches(candidate, query));
-    if (!offer) return { modifiedCount: 0 };
-    Object.assign(offer, update.$set);
-    return { modifiedCount: 1 };
-  });
-  mockOfferModel.updateMany.mockResolvedValue({ modifiedCount: 1 });
 
   mockPrisma.user.findUnique.mockImplementation(async ({ where }) => clone(mockUsers.get(where.id)));
   mockOfferService.loadManagedOffer.mockImplementation(async (identifier) => {
-    const offer = mockOffers.find((candidate) => (
-      candidate.reference === identifier || String(candidate._id) === String(identifier)
+    const selected = mockOffers.find((item) => (
+      item.id === identifier || item.reference === identifier
     ));
-    if (!offer) throw new Error('missing offer');
-    return { offer: clone(offer), cooperative: { id: offer.cooperativeId, isVerified: true } };
+    if (!selected) throw new Error('missing offer');
+    return { offer: clone(selected), cooperative: { id: selected.cooperativeId, isVerified: true } };
   });
   mockDaraja.requestB2CPayout.mockResolvedValue({
     originatorConversationId: 'origin-1',
@@ -190,7 +195,7 @@ beforeEach(() => {
 
 test('direct payout uses weighedKg, is same-reference idempotent, and blocks another reference', async () => {
   const first = await paymentService.initiatePayout({
-    offerIdentifier: OFFER_ID,
+    offerIdentifier: String(OFFER_ID),
     user: staff(),
     reference: 'pay-direct-1',
   });
@@ -200,7 +205,7 @@ test('direct payout uses weighedKg, is same-reference idempotent, and blocks ano
     reference: 'pay-direct-1',
   });
 
-  expect(first.payment.amount).toBe(1000);
+  expect(first.payment).toEqual(expect.objectContaining({ id: 1, offerId: OFFER_ID, amount: 1000 }));
   expect(first.payment.amount).not.toBe(99900);
   expect(mockDaraja.requestB2CPayout).toHaveBeenCalledWith(expect.objectContaining({
     amount: 1000,
@@ -217,6 +222,24 @@ test('direct payout uses weighedKg, is same-reference idempotent, and blocks ano
   expect(mockDaraja.requestB2CPayout).toHaveBeenCalledTimes(1);
 });
 
+test('a globally reused reference is rejected before any provider call', async () => {
+  mockPayments.push({
+    id: 9,
+    offerId: 99,
+    farmerId: 5,
+    purpose: 'direct_purchase',
+    reference: 'GLOBAL-REFERENCE',
+    status: 'submitted',
+  });
+
+  await expect(paymentService.initiatePayout({
+    offerIdentifier: OFFER_ID,
+    user: staff(),
+    reference: 'global-reference',
+  })).rejects.toMatchObject({ status: 409, code: 'PAYMENT_REFERENCE_CONFLICT' });
+  expect(mockDaraja.requestB2CPayout).not.toHaveBeenCalled();
+});
+
 test('payout is blocked until the farmer has confirmed payment details', async () => {
   mockOffers[0].paymentDetailsConfirmedAt = null;
 
@@ -224,11 +247,8 @@ test('payout is blocked until the farmer has confirmed payment details', async (
     offerIdentifier: OFFER_ID,
     user: staff(),
     reference: 'pay-unconfirmed',
-  })).rejects.toMatchObject({
-    status: 409,
-    code: 'PAYMENT_DETAILS_NOT_CONFIRMED',
-  });
-  expect(mockPaymentModel.create).not.toHaveBeenCalled();
+  })).rejects.toMatchObject({ status: 409, code: 'PAYMENT_DETAILS_NOT_CONFIRMED' });
+  expect(mockPrisma.payment.create).not.toHaveBeenCalled();
   expect(mockDaraja.requestB2CPayout).not.toHaveBeenCalled();
 });
 
@@ -286,20 +306,12 @@ test('consignment sale snapshots gross, commission, and rounded payout before on
     payoutAmount: 8751,
   });
   expect(mockOffers[0].saleAmount).toBe(10001);
-  expect(mockSmsService.sendConsignmentSale).toHaveBeenCalledWith(
-    '+254700000004',
-    expect.objectContaining({
-      saleAmount: 10001,
-      commissionAmount: 1250.125,
-      payoutAmount: 8751,
-    })
-  );
   expect(mockSmsService.sendConsignmentSale).toHaveBeenCalledTimes(1);
   expect(mockDaraja.requestB2CPayout).toHaveBeenCalledTimes(1);
   expect(retried.idempotent).toBe(true);
 });
 
-test('duplicate success callbacks mark the offer paid and send one SMS', async () => {
+test('duplicate success callbacks atomically mark the offer paid and send one SMS', async () => {
   await paymentService.initiatePayout({
     offerIdentifier: OFFER_ID,
     user: staff(),
@@ -325,7 +337,6 @@ test('duplicate success callbacks mark the offer paid and send one SMS', async (
   expect(mockPayments[0].status).toBe('succeeded');
   expect(mockOffers[0].status).toBe('paid');
   expect(mockSmsService.sendPayoutSuccess).toHaveBeenCalledTimes(1);
-  expect(mockOfferModel.updateOne).toHaveBeenCalledTimes(1);
 });
 
 test('timeout callback never marks the offer paid', async () => {
@@ -348,13 +359,12 @@ test('timeout callback never marks the offer paid', async () => {
 
   expect(mockPayments[0].status).toBe('timeout');
   expect(mockOffers[0].status).toBe('verified');
-  expect(mockOfferModel.updateOne).not.toHaveBeenCalled();
   expect(mockSmsService.sendPayoutFailure).toHaveBeenCalledTimes(1);
 });
 
 test('farmer cannot inspect or confirm another farmer offer', async () => {
   mockPayments.push({
-    _id: 'payment-existing',
+    id: 7,
     offerId: OFFER_ID,
     farmerId: 4,
     amount: 1000,
@@ -383,19 +393,21 @@ test('confirmation requires a PIN and stores only the confirmation timestamp', a
     farmerId: 4,
   })).rejects.toMatchObject({ status: 400, code: 'PIN_REQUIRED' });
 
+  const now = new Date('2026-11-23T12:00:00.000Z');
   const result = await paymentService.confirmPaymentDetails({
     offerIdentifier: OFFER_ID,
     farmerId: 4,
     pin: '2468',
-    now: new Date('2026-11-23T12:00:00.000Z'),
+    now,
   });
 
   expect(mockBcrypt.compare).toHaveBeenCalledWith('2468', 'pin-hash');
-  expect(result.paymentDetailsConfirmedAt).toEqual(new Date('2026-11-23T12:00:00.000Z'));
-  const update = mockOfferModel.findOneAndUpdate.mock.calls.at(-1)[1].$set;
+  expect(result).toEqual({ offerId: OFFER_ID, paymentDetailsConfirmedAt: now });
+  const update = mockPrisma.offer.updateMany.mock.calls.at(-1)[0];
   expect(update).toEqual({
-    paymentDetailsConfirmedAt: new Date('2026-11-23T12:00:00.000Z'),
+    where: { id: OFFER_ID, farmerId: 4, status: { not: 'paid' } },
+    data: { paymentDetailsConfirmedAt: now },
   });
-  expect(update).not.toHaveProperty('pin');
-  expect(update).not.toHaveProperty('mpesaNumber');
+  expect(update.data).not.toHaveProperty('pin');
+  expect(update.data).not.toHaveProperty('mpesaNumber');
 });

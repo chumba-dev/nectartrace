@@ -32,23 +32,46 @@ enum OrderStatus {
   CANCELLED
 }
 
-enum HarvestOfferStatus {
-  SUBMITTED
-  ACCEPTED
-  REJECTED
-  RECEIVED
-  VERIFIED
+enum OfferStatus {
+  offered   @map("SUBMITTED")
+  accepted  @map("ACCEPTED")
+  rejected  @map("REJECTED")
+  expired   @map("EXPIRED")
+  delivered @map("RECEIVED")
+  verified  @map("VERIFIED")
+  paid      @map("PAID")
+
+  @@map("HarvestOfferStatus")
 }
 
-enum SettlementType {
-  DIRECT_PURCHASE
-  CONSIGNMENT
+enum TradeType {
+  direct      @map("DIRECT_PURCHASE")
+  consignment @map("CONSIGNMENT")
+
+  @@map("SettlementType")
 }
 
 enum SettlementStatus {
   PENDING
   PARTIALLY_PAID
   PAID
+}
+
+enum PaymentMethod {
+  daraja_b2c
+}
+
+enum PaymentPurpose {
+  direct_purchase
+  consignment
+}
+
+enum PaymentStatus {
+  pending
+  submitted
+  succeeded
+  failed
+  timeout
 }
 
 // ============================================
@@ -73,7 +96,8 @@ model Cooperative {
   users             User[]
   batches           HoneyBatch[]
   listings          Listing[]
-  harvestOffers     HarvestOffer[]
+  offers            Offer[]
+  payments          Payment[]
   farmerSettlements FarmerSettlement[]
 }
 
@@ -100,7 +124,8 @@ model User {
   cooperative            Cooperative?            @relation(fields: [cooperativeId], references: [id])
   orders                 Order[]                 @relation("BuyerOrders")
   harvestLogs            HarvestLog[]
-  harvestOffers          HarvestOffer[]          @relation("FarmerHarvestOffers")
+  offers                 Offer[]                 @relation("FarmerOffers")
+  payments               Payment[]               @relation("FarmerPayments")
   farmerSettlements      FarmerSettlement[]      @relation("FarmerSettlements")
   emailVerificationToken EmailVerificationToken?
 
@@ -124,47 +149,98 @@ model HoneyBatch {
   createdAt        DateTime    @default(now())
   updatedAt        DateTime    @updatedAt
 
-  cooperative  Cooperative   @relation(fields: [cooperativeId], references: [id])
-  listings     Listing[]
-  harvestOffer HarvestOffer?
+  cooperative Cooperative @relation(fields: [cooperativeId], references: [id])
+  listings    Listing[]
+  offers      Offer[]
 
   @@index([cooperativeId])
   @@index([status])
 }
 
-model HarvestOffer {
-  id                 Int                @id @default(autoincrement())
-  reference          String             @unique
-  ussdSessionId      String?            @unique
-  farmerId           Int
-  cooperativeId      Int
-  pickupVillage      String
-  offeredWeightKg    Float
-  expectedPricePerKg Float?
-  settlementType     SettlementType
-  status             HarvestOfferStatus @default(SUBMITTED)
-  acceptedWeightKg   Float?
-  agreedPricePerKg   Float?
-  rejectionReason    String?
-  honeyBatchId       Int?               @unique
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
+model Offer {
+  id                        Int         @id @default(autoincrement())
+  reference                 String      @unique
+  ussdSessionId             String?     @unique
+  farmerId                  Int
+  cooperativeId             Int
+  ward                      String      @map("pickupVillage")
+  offeredKg                 Decimal     @map("offeredWeightKg") @db.Decimal(12, 3)
+  expectedPricePerKg        Decimal     @default(0) @db.Decimal(12, 2)
+  tradeType                 TradeType   @map("settlementType")
+  commissionPercent         Decimal     @db.Decimal(5, 2)
+  agreedPricePerKg          Decimal?    @db.Decimal(12, 2)
+  weighedKg                 Decimal?    @map("acceptedWeightKg") @db.Decimal(12, 3)
+  moisturePercent           Decimal?    @db.Decimal(5, 2)
+  expiresAt                 DateTime
+  status                    OfferStatus @default(offered)
+  rejectionReason           String?
+  batchId                   Int?        @map("honeyBatchId")
+  saleAmount                Decimal?    @db.Decimal(14, 2)
+  paymentDetailsConfirmedAt DateTime?
+  batchReservationToken     String?
+  offeredAt                 DateTime
+  acceptedAt                DateTime?
+  rejectedAt                DateTime?
+  expiredAt                 DateTime?
+  deliveredAt               DateTime?
+  verifiedAt                DateTime?
+  paidAt                    DateTime?
+  createdAt                 DateTime    @default(now())
+  updatedAt                 DateTime    @updatedAt
 
-  farmer      User              @relation("FarmerHarvestOffers", fields: [farmerId], references: [id])
-  cooperative Cooperative       @relation(fields: [cooperativeId], references: [id])
-  batch       HoneyBatch?       @relation(fields: [honeyBatchId], references: [id])
-  settlement  FarmerSettlement?
+  farmer           User              @relation("FarmerOffers", fields: [farmerId], references: [id])
+  cooperative      Cooperative       @relation(fields: [cooperativeId], references: [id])
+  batch            HoneyBatch?       @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  payments         Payment[]
+  legacySettlement FarmerSettlement?
 
   @@index([farmerId, createdAt])
-  @@index([cooperativeId, status])
+  @@index([cooperativeId, status, expiresAt])
+  @@index([cooperativeId, status, batchId])
+  @@index([batchReservationToken])
+  @@map("HarvestOffer")
 }
 
+model Payment {
+  id                       Int            @id @default(autoincrement())
+  offerId                  Int
+  farmerId                 Int
+  cooperativeId            Int
+  amount                   Int
+  method                   PaymentMethod  @default(daraja_b2c)
+  reference                String         @unique
+  purpose                  PaymentPurpose
+  status                   PaymentStatus  @default(pending)
+  originatorConversationId String?
+  conversationId           String?
+  transactionId            String?
+  resultCode               Int?
+  resultDescription        String?
+  requestedAt              DateTime       @default(now())
+  submittedAt              DateTime?
+  completedAt              DateTime?
+  failedAt                 DateTime?
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+
+  offer       Offer       @relation(fields: [offerId], references: [id])
+  farmer      User        @relation("FarmerPayments", fields: [farmerId], references: [id])
+  cooperative Cooperative @relation(fields: [cooperativeId], references: [id])
+
+  @@unique([offerId, purpose])
+  @@index([farmerId, status])
+  @@index([cooperativeId, status])
+  @@index([originatorConversationId])
+  @@index([conversationId])
+}
+
+/// Legacy compatibility only. Active payout code uses Payment.
 model FarmerSettlement {
   id               Int              @id @default(autoincrement())
   offerId          Int              @unique
   farmerId         Int
   cooperativeId    Int
-  type             SettlementType
+  type             TradeType
   grossAmount      Float
   commissionAmount Float
   netAmount        Float
@@ -175,9 +251,9 @@ model FarmerSettlement {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
-  offer       HarvestOffer @relation(fields: [offerId], references: [id])
-  farmer      User         @relation("FarmerSettlements", fields: [farmerId], references: [id])
-  cooperative Cooperative  @relation(fields: [cooperativeId], references: [id])
+  offer       Offer       @relation(fields: [offerId], references: [id])
+  farmer      User        @relation("FarmerSettlements", fields: [farmerId], references: [id])
+  cooperative Cooperative @relation(fields: [cooperativeId], references: [id])
 
   @@index([farmerId, status])
   @@index([cooperativeId, status])

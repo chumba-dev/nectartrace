@@ -14,10 +14,6 @@ module.exports = {
     url: process.env.DATABASE_URL,
   },
 
-  mongodb: {
-    uri: process.env.MONGODB_URI,
-  },
-
   offers: {
     expiryIntervalMs: offerExpiryIntervalMs,
   },

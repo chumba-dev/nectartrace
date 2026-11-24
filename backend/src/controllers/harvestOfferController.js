@@ -21,11 +21,7 @@ function parseOptionalNumber(value) {
 }
 
 function parseOfferIdentifier(value) {
-  const identifier = typeof value === 'string' ? value.trim() : '';
-  if (!identifier || identifier.length > 80) {
-    throw new offerService.OfferServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
-  }
-  return identifier;
+  return offerService.normalizeOfferIdentifier(value);
 }
 
 function parseStatus(value) {
@@ -74,10 +70,7 @@ function handleControllerError(err, res, next) {
       code: err.code,
     });
   }
-  if (err?.name === 'ValidationError' || err?.name === 'CastError') {
-    return res.status(400).json({ success: false, message: 'Invalid offer data' });
-  }
-  if (err?.code === 11000) {
+  if (err?.code === 'P2002') {
     return res.status(409).json({ success: false, message: 'Offer already exists' });
   }
   return next(err);

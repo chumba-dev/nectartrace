@@ -1,6 +1,6 @@
-const Offer = require('../models/Offer');
 const prisma = require('../config/db');
 
+const OFFER_LIFETIME_MS = 48 * 60 * 60 * 1000;
 const OFFER_STATUSES = [
   'offered',
   'accepted',
@@ -19,6 +19,10 @@ const cooperativeSelect = {
   commissionPercent: true,
 };
 
+const batchInclude = {
+  batch: { select: { batchId: true } },
+};
+
 class OfferServiceError extends Error {
   constructor(status, message, code) {
     super(message);
@@ -28,27 +32,41 @@ class OfferServiceError extends Error {
   }
 }
 
-function toPlain(offer) {
-  if (!offer) return null;
-  if (typeof offer.toObject === 'function') {
-    return offer.toObject({ virtuals: false, versionKey: false });
+function normalizeOfferIdentifier(identifier) {
+  if (typeof identifier === 'number') {
+    if (Number.isSafeInteger(identifier) && identifier > 0) return identifier;
+    throw new OfferServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
   }
-  return { ...offer };
+
+  const normalized = typeof identifier === 'string' ? identifier.trim() : '';
+  if (!normalized || normalized.length > 80) {
+    throw new OfferServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
+  }
+  if (/^\d+$/.test(normalized)) {
+    const parsed = Number(normalized);
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+    throw new OfferServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
+  }
+  return normalized.toUpperCase();
 }
 
-function identifierFilter(identifier) {
-  const normalized = String(identifier || '').trim();
-  if (/^[a-f\d]{24}$/i.test(normalized)) return { _id: normalized };
-  return { reference: normalized.toUpperCase() };
+function offerIdentifierWhere(identifier) {
+  const normalized = normalizeOfferIdentifier(identifier);
+  return typeof normalized === 'number'
+    ? { id: normalized }
+    : { reference: normalized };
 }
 
-function documentFilter(offer) {
-  if (offer._id) return { _id: offer._id };
-  if (offer.reference) return { reference: offer.reference };
-  throw new OfferServiceError(400, 'Offer identifier is required', 'INVALID_OFFER_ID');
+function decimalNumber(value) {
+  return value === null || value === undefined ? null : Number(value);
 }
 
-function assertFiniteRange(value, name, { min, max, exclusiveMin = false, exclusiveMax = false }) {
+function assertFiniteRange(value, name, {
+  min,
+  max,
+  exclusiveMin = false,
+  exclusiveMax = false,
+}) {
   if (!Number.isFinite(value)) {
     throw new OfferServiceError(400, `${name} must be a finite number`, 'INVALID_OFFER_VALUE');
   }
@@ -108,31 +126,29 @@ async function resolveIncomingScope(user, requestedCooperativeId) {
   });
 }
 
-async function queryOffers(filter, { page, limit }) {
+async function queryOffers(where, { page, limit }) {
   const skip = (page - 1) * limit;
-  const [documents, total] = await Promise.all([
-    Offer.find(filter, null, {
-      sort: { createdAt: -1 },
+  const [offers, total] = await Promise.all([
+    prisma.offer.findMany({
+      where,
+      include: batchInclude,
+      orderBy: { createdAt: 'desc' },
       skip,
-      limit,
+      take: limit,
     }),
-    Offer.countDocuments(filter),
+    prisma.offer.count({ where }),
   ]);
 
-  return {
-    offers: documents.map(toPlain),
-    total,
-  };
+  return { offers, total };
 }
 
 async function listIncomingOffers({ user, cooperativeId, status, page, limit }) {
   const cooperatives = await resolveIncomingScope(user, cooperativeId);
-  const filter = {
-    cooperativeId: { $in: cooperatives.map((cooperative) => cooperative.id) },
+  const where = {
+    cooperativeId: { in: cooperatives.map((cooperative) => cooperative.id) },
+    ...(status && { status }),
   };
-  if (status) filter.status = status;
-
-  const result = await queryOffers(filter, { page, limit });
+  const result = await queryOffers(where, { page, limit });
   return {
     ...result,
     offers: await enrichOffers(result.offers, { includeFarmer: true }),
@@ -140,22 +156,22 @@ async function listIncomingOffers({ user, cooperativeId, status, page, limit }) 
 }
 
 async function listFarmerOffers({ farmerId, status, page, limit }) {
-  const filter = { farmerId };
-  if (status) filter.status = status;
-
-  const result = await queryOffers(filter, { page, limit });
+  const where = { farmerId, ...(status && { status }) };
+  const result = await queryOffers(where, { page, limit });
   return {
     ...result,
     offers: await enrichOffers(result.offers),
   };
 }
 
-async function findOfferByIdentifier(identifier, additionalFilter = {}) {
-  const document = await Offer.findOne({
-    ...identifierFilter(identifier),
-    ...additionalFilter,
+async function findOfferByIdentifier(identifier, additionalWhere = {}) {
+  return prisma.offer.findFirst({
+    where: {
+      ...offerIdentifierWhere(identifier),
+      ...additionalWhere,
+    },
+    include: batchInclude,
   });
-  return toPlain(document);
 }
 
 async function getFarmerOffer(identifier, farmerId) {
@@ -188,35 +204,34 @@ async function loadManagedOffer(identifier, user) {
 }
 
 function sanitizeOffer(offer, farmer, cooperative) {
-  const source = toPlain(offer);
   const sanitized = {
-    id: source._id ? String(source._id) : String(source.id),
-    reference: source.reference,
-    farmerId: source.farmerId,
-    cooperativeId: source.cooperativeId,
-    ward: source.ward,
-    offeredKg: source.offeredKg,
-    expectedPricePerKg: source.expectedPricePerKg,
-    tradeType: source.tradeType,
-    commissionPercent: source.commissionPercent,
-    agreedPricePerKg: source.agreedPricePerKg ?? null,
-    weighedKg: source.weighedKg ?? null,
-    moisturePercent: source.moisturePercent ?? null,
-    status: source.status,
-    expiresAt: source.expiresAt,
-    rejectionReason: source.rejectionReason ?? null,
-    batchId: source.batchId ?? null,
-    saleAmount: source.saleAmount ?? null,
-    paymentDetailsConfirmedAt: source.paymentDetailsConfirmedAt ?? null,
-    offeredAt: source.offeredAt,
-    acceptedAt: source.acceptedAt ?? null,
-    rejectedAt: source.rejectedAt ?? null,
-    expiredAt: source.expiredAt ?? null,
-    deliveredAt: source.deliveredAt ?? null,
-    verifiedAt: source.verifiedAt ?? null,
-    paidAt: source.paidAt ?? null,
-    createdAt: source.createdAt,
-    updatedAt: source.updatedAt,
+    id: offer.id,
+    reference: offer.reference,
+    farmerId: offer.farmerId,
+    cooperativeId: offer.cooperativeId,
+    ward: offer.ward,
+    offeredKg: decimalNumber(offer.offeredKg),
+    expectedPricePerKg: decimalNumber(offer.expectedPricePerKg),
+    tradeType: offer.tradeType,
+    commissionPercent: decimalNumber(offer.commissionPercent),
+    agreedPricePerKg: decimalNumber(offer.agreedPricePerKg),
+    weighedKg: decimalNumber(offer.weighedKg),
+    moisturePercent: decimalNumber(offer.moisturePercent),
+    status: offer.status,
+    expiresAt: offer.expiresAt,
+    rejectionReason: offer.rejectionReason ?? null,
+    batchId: offer.batch?.batchId ?? null,
+    saleAmount: decimalNumber(offer.saleAmount),
+    paymentDetailsConfirmedAt: offer.paymentDetailsConfirmedAt ?? null,
+    offeredAt: offer.offeredAt,
+    acceptedAt: offer.acceptedAt ?? null,
+    rejectedAt: offer.rejectedAt ?? null,
+    expiredAt: offer.expiredAt ?? null,
+    deliveredAt: offer.deliveredAt ?? null,
+    verifiedAt: offer.verifiedAt ?? null,
+    paidAt: offer.paidAt ?? null,
+    createdAt: offer.createdAt,
+    updatedAt: offer.updatedAt,
   };
 
   if (cooperative) {
@@ -263,8 +278,8 @@ async function enrichOffers(offers, { includeFarmer = false } = {}) {
       })
       : Promise.resolve([]),
   ]);
-  const cooperativeById = new Map(cooperatives.map((cooperative) => [cooperative.id, cooperative]));
-  const farmerById = new Map(farmers.map((farmer) => [farmer.id, farmer]));
+  const cooperativeById = new Map(cooperatives.map((item) => [item.id, item]));
+  const farmerById = new Map(farmers.map((item) => [item.id, item]));
 
   return offers.map((offer) => sanitizeOffer(
     offer,
@@ -277,14 +292,22 @@ function offerIsDue(offer, now) {
   return new Date(offer.expiresAt).getTime() <= now.getTime();
 }
 
+async function loadOfferAfterTransition(id) {
+  return prisma.offer.findUnique({
+    where: { id },
+    include: batchInclude,
+  });
+}
+
 async function markOfferExpired(offer, now) {
-  await Offer.updateOne({
-    ...documentFilter(offer),
-    status: 'offered',
-    expiresAt: { $lte: now },
-  }, {
-    $set: { status: 'expired', expiredAt: now },
-  }, { runValidators: true });
+  await prisma.offer.updateMany({
+    where: {
+      id: offer.id,
+      status: 'offered',
+      expiresAt: { lte: now },
+    },
+    data: { status: 'expired', expiredAt: now },
+  });
 }
 
 async function assertCurrentOffered(offer, now) {
@@ -313,27 +336,28 @@ async function acceptOffer(offer, agreedPricePerKg, now = new Date()) {
     assertFiniteRange(agreedPricePerKg, 'agreedPricePerKg', { min: 0 });
   }
 
-  const document = await Offer.findOneAndUpdate({
-    ...documentFilter(offer),
-    cooperativeId: offer.cooperativeId,
-    status: 'offered',
-    expiresAt: { $gt: now },
-  }, {
-    $set: {
+  const result = await prisma.offer.updateMany({
+    where: {
+      id: offer.id,
+      cooperativeId: offer.cooperativeId,
+      status: 'offered',
+      expiresAt: { gt: now },
+    },
+    data: {
       status: 'accepted',
       agreedPricePerKg: hasAgreedPrice ? agreedPricePerKg : null,
       acceptedAt: now,
       rejectionReason: null,
     },
-  }, { new: true, runValidators: true });
-  if (!document) {
+  });
+  if (result.count !== 1) {
     throw new OfferServiceError(
       409,
       'Offer status changed before acceptance completed',
       'OFFER_TRANSITION_CONFLICT'
     );
   }
-  return toPlain(document);
+  return loadOfferAfterTransition(offer.id);
 }
 
 async function rejectOffer(offer, reason, now = new Date()) {
@@ -347,26 +371,23 @@ async function rejectOffer(offer, reason, now = new Date()) {
     );
   }
 
-  const document = await Offer.findOneAndUpdate({
-    ...documentFilter(offer),
-    cooperativeId: offer.cooperativeId,
-    status: 'offered',
-    expiresAt: { $gt: now },
-  }, {
-    $set: {
-      status: 'rejected',
-      rejectionReason,
-      rejectedAt: now,
+  const result = await prisma.offer.updateMany({
+    where: {
+      id: offer.id,
+      cooperativeId: offer.cooperativeId,
+      status: 'offered',
+      expiresAt: { gt: now },
     },
-  }, { new: true, runValidators: true });
-  if (!document) {
+    data: { status: 'rejected', rejectionReason, rejectedAt: now },
+  });
+  if (result.count !== 1) {
     throw new OfferServiceError(
       409,
       'Offer status changed before rejection completed',
       'OFFER_TRANSITION_CONFLICT'
     );
   }
-  return toPlain(document);
+  return loadOfferAfterTransition(offer.id);
 }
 
 async function recordDelivery(offer, { weighedKg, moisturePercent }, now = new Date()) {
@@ -385,19 +406,20 @@ async function recordDelivery(offer, { weighedKg, moisturePercent }, now = new D
     exclusiveMax: true,
   });
 
-  const document = await Offer.findOneAndUpdate({
-    ...documentFilter(offer),
-    cooperativeId: offer.cooperativeId,
-    status: 'accepted',
-  }, {
-    $set: {
+  const result = await prisma.offer.updateMany({
+    where: {
+      id: offer.id,
+      cooperativeId: offer.cooperativeId,
+      status: 'accepted',
+    },
+    data: {
       status: 'delivered',
       weighedKg,
       moisturePercent,
       deliveredAt: now,
     },
-  }, { new: true, runValidators: true });
-  if (!document) {
+  });
+  if (result.count !== 1) {
     throw new OfferServiceError(
       409,
       'Offer status changed before delivery completed',
@@ -405,20 +427,23 @@ async function recordDelivery(offer, { weighedKg, moisturePercent }, now = new D
     );
   }
 
-  const delivered = toPlain(document);
   await prisma.user.updateMany({
     where: {
-      id: delivered.farmerId,
+      id: offer.farmerId,
       role: 'FARMER',
       farmerVerifiedAt: null,
     },
     data: { farmerVerifiedAt: now },
   });
-  return delivered;
+  return loadOfferAfterTransition(offer.id);
 }
 
 async function verifyOffer(offer, now = new Date()) {
-  if (offer.status !== 'delivered' || !offer.weighedKg || !offer.moisturePercent) {
+  if (
+    offer.status !== 'delivered'
+    || !(Number(offer.weighedKg) > 0)
+    || !(Number(offer.moisturePercent) > 0)
+  ) {
     throw new OfferServiceError(
       409,
       'Only delivered offers with measured weight and moisture can be verified',
@@ -426,31 +451,35 @@ async function verifyOffer(offer, now = new Date()) {
     );
   }
 
-  const document = await Offer.findOneAndUpdate({
-    ...documentFilter(offer),
-    cooperativeId: offer.cooperativeId,
-    status: 'delivered',
-    weighedKg: { $gt: 0, $lte: 10000 },
-    moisturePercent: { $gt: 0, $lt: 100 },
-  }, {
-    $set: { status: 'verified', verifiedAt: now },
-  }, { new: true, runValidators: true });
-  if (!document) {
+  const result = await prisma.offer.updateMany({
+    where: {
+      id: offer.id,
+      cooperativeId: offer.cooperativeId,
+      status: 'delivered',
+      weighedKg: { gt: 0, lte: 10000 },
+      moisturePercent: { gt: 0, lt: 100 },
+    },
+    data: { status: 'verified', verifiedAt: now },
+  });
+  if (result.count !== 1) {
     throw new OfferServiceError(
       409,
       'Offer status changed before verification completed',
       'OFFER_TRANSITION_CONFLICT'
     );
   }
-  return toPlain(document);
+  return loadOfferAfterTransition(offer.id);
 }
 
 async function verifyFarmer({ cooperativeId, farmerId, now = new Date() }) {
   await requireVerifiedCooperative(cooperativeId);
-  const qualifyingOffer = await Offer.exists({
-    cooperativeId,
-    farmerId,
-    status: { $in: ['delivered', 'verified'] },
+  const qualifyingOffer = await prisma.offer.findFirst({
+    where: {
+      cooperativeId,
+      farmerId,
+      status: { in: ['delivered', 'verified'] },
+    },
+    select: { id: true },
   });
   if (!qualifyingOffer) {
     throw new OfferServiceError(
@@ -478,25 +507,27 @@ async function verifyFarmer({ cooperativeId, farmerId, now = new Date() }) {
 }
 
 async function expireDueOffers(now = new Date()) {
-  const result = await Offer.updateMany({
-    status: 'offered',
-    expiresAt: { $lte: now },
-  }, {
-    $set: { status: 'expired', expiredAt: now },
-  }, { runValidators: true });
-  return result.modifiedCount ?? result.nModified ?? 0;
+  const result = await prisma.offer.updateMany({
+    where: { status: 'offered', expiresAt: { lte: now } },
+    data: { status: 'expired', expiredAt: now },
+  });
+  return result.count;
 }
 
 module.exports = {
+  OFFER_LIFETIME_MS,
   OFFER_STATUSES,
   OfferServiceError,
   acceptOffer,
   enrichOffers,
   expireDueOffers,
+  findOfferByIdentifier,
   getFarmerOffer,
   listFarmerOffers,
   listIncomingOffers,
   loadManagedOffer,
+  normalizeOfferIdentifier,
+  offerIdentifierWhere,
   recordDelivery,
   rejectOffer,
   requireVerifiedCooperative,

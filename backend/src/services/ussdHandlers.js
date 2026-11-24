@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const prisma = require('../config/db');
 const logger = require('../utils/logger');
-const Offer = require('../models/Offer');
 const menu = require('./ussdMenu');
 const sessionService = require('./ussdSessionService');
 const smsService = require('./smsService');
@@ -480,13 +479,14 @@ async function handleAccount(runtime, input, phoneNumber) {
   const currentUser = await findUserByPhone(phoneNumber);
   const numberChanged = normalizeKenyanPhone(currentUser?.mpesaNumber) !== mpesaNumber;
   if (numberChanged) {
-    await Offer.updateMany({
-      farmerId: runtime.farmer.id,
-      status: { $ne: 'paid' },
-      paymentDetailsConfirmedAt: { $ne: null },
-    }, {
-      $set: { paymentDetailsConfirmedAt: null },
-    }, { runValidators: true });
+    await prisma.offer.updateMany({
+      where: {
+        farmerId: runtime.farmer.id,
+        status: { not: 'paid' },
+        paymentDetailsConfirmedAt: { not: null },
+      },
+      data: { paymentDetailsConfirmedAt: null },
+    });
   }
   await prisma.user.update({
     where: { id: runtime.farmer.id },
@@ -523,16 +523,11 @@ function makeOfferReference() {
   return `NTO-${date}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
 }
 
-function plainOffer(offer) {
-  if (!offer) return null;
-  return typeof offer.toObject === 'function' ? offer.toObject() : offer;
-}
-
 async function findOfferBySession(sessionId) {
-  return plainOffer(await Offer.findOne({ ussdSessionId: sessionId }));
+  return prisma.offer.findUnique({ where: { ussdSessionId: sessionId } });
 }
 
-async function createMongoOffer(runtime, sessionId) {
+async function createOffer(runtime, sessionId) {
   const selected = runtime.context.offer.selectedCooperative;
   const existing = await findOfferBySession(sessionId);
   if (existing) {
@@ -563,27 +558,29 @@ async function createMongoOffer(runtime, sessionId) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const offeredAt = new Date();
     try {
-      const created = await Offer.create({
-        farmerId: runtime.farmer.id,
-        cooperativeId: cooperative.id,
-        ward: cooperative.ward,
-        offeredKg: runtime.context.offer.offeredKg,
-        expectedPricePerKg: runtime.context.offer.expectedPricePerKg,
-        tradeType: runtime.context.offer.tradeType,
-        commissionPercent,
-        status: 'offered',
-        offeredAt,
-        expiresAt: new Date(offeredAt.getTime() + OFFER_LIFETIME_MS),
-        ussdSessionId: sessionId,
-        reference: makeOfferReference(),
+      const created = await prisma.offer.create({
+        data: {
+          farmerId: runtime.farmer.id,
+          cooperativeId: cooperative.id,
+          ward: cooperative.ward,
+          offeredKg: runtime.context.offer.offeredKg,
+          expectedPricePerKg: runtime.context.offer.expectedPricePerKg,
+          tradeType: runtime.context.offer.tradeType,
+          commissionPercent,
+          status: 'offered',
+          offeredAt,
+          expiresAt: new Date(offeredAt.getTime() + OFFER_LIFETIME_MS),
+          ussdSessionId: sessionId,
+          reference: makeOfferReference(),
+        },
       });
       return {
-        offer: plainOffer(created),
+        offer: created,
         cooperativeName: cleanSingleLine(cooperative.name, 120),
         created: true,
       };
     } catch (err) {
-      if (err?.code !== 11000) throw err;
+      if (err?.code !== 'P2002') throw err;
       const duplicate = await findOfferBySession(sessionId);
       if (duplicate) {
         if (duplicate.farmerId !== runtime.farmer.id) throw err;
@@ -600,7 +597,7 @@ async function createMongoOffer(runtime, sessionId) {
 }
 
 async function confirmOffer(runtime, phoneNumber, sessionId) {
-  const result = await createMongoOffer(runtime, sessionId);
+  const result = await createOffer(runtime, sessionId);
   if (result.unavailable) {
     finish(runtime, menu.end('Cooperative is no longer verified in this ward. No offer submitted.'));
     return;
@@ -775,22 +772,23 @@ async function handleOffer(runtime, input, phoneNumber, sessionId) {
 }
 
 async function loadOfferHistory(runtime, page) {
-  const documents = await Offer.find(
-    { farmerId: runtime.farmer.id },
-    {
-      reference: 1,
-      status: 1,
-      tradeType: 1,
-      weighedKg: 1,
-      agreedPricePerKg: 1,
-      saleAmount: 1,
-      commissionPercent: 1,
-      paymentDetailsConfirmedAt: 1,
-      createdAt: 1,
+  const offers = await prisma.offer.findMany({
+    where: { farmerId: runtime.farmer.id },
+    select: {
+      reference: true,
+      status: true,
+      tradeType: true,
+      weighedKg: true,
+      agreedPricePerKg: true,
+      saleAmount: true,
+      commissionPercent: true,
+      paymentDetailsConfirmedAt: true,
+      createdAt: true,
     },
-    { sort: { createdAt: -1 }, skip: page * USSD_PAGE_SIZE, limit: USSD_PAGE_SIZE + 1 }
-  );
-  const offers = documents.map(plainOffer);
+    orderBy: { createdAt: 'desc' },
+    skip: page * USSD_PAGE_SIZE,
+    take: USSD_PAGE_SIZE + 1,
+  });
   runtime.context.offerHistory = {
     page,
     hasMore: offers.length > USSD_PAGE_SIZE,
@@ -815,10 +813,9 @@ function renderSelectedOffer(runtime, error) {
 async function reloadSelectedOffer(runtime) {
   const reference = runtime.context.selectedOffer?.reference;
   if (!reference) return null;
-  return plainOffer(await Offer.findOne({
-    reference,
-    farmerId: runtime.farmer.id,
-  }));
+  return prisma.offer.findFirst({
+    where: { reference, farmerId: runtime.farmer.id },
+  });
 }
 
 async function handleOfferHistory(runtime, input, phoneNumber) {
@@ -835,10 +832,12 @@ async function handleOfferHistory(runtime, input, phoneNumber) {
       if (!selected) {
         renderOfferHistory(runtime, 'Invalid offer choice.');
       } else {
-        const current = plainOffer(await Offer.findOne({
-          reference: selected.reference,
-          farmerId: runtime.farmer.id,
-        }));
+        const current = await prisma.offer.findFirst({
+          where: {
+            reference: selected.reference,
+            farmerId: runtime.farmer.id,
+          },
+        });
         if (!current) {
           renderOfferHistory(runtime, 'Offer is unavailable.');
         } else {
@@ -918,14 +917,15 @@ async function handleOfferHistory(runtime, input, phoneNumber) {
     return { sensitive: true };
   }
   const confirmedAt = new Date();
-  const confirmed = await Offer.findOneAndUpdate({
-    reference: current.reference,
-    farmerId: runtime.farmer.id,
-    status: { $ne: 'paid' },
-  }, {
-    $set: { paymentDetailsConfirmedAt: confirmedAt },
-  }, { new: true, runValidators: true });
-  if (!confirmed) {
+  const confirmed = await prisma.offer.updateMany({
+    where: {
+      reference: current.reference,
+      farmerId: runtime.farmer.id,
+      status: { not: 'paid' },
+    },
+    data: { paymentDetailsConfirmedAt: confirmedAt },
+  });
+  if (confirmed.count !== 1) {
     finish(runtime, menu.end('Offer changed before confirmation. Please dial again.'));
     return { sensitive: true };
   }

@@ -1,6 +1,4 @@
 const bcrypt = require('bcryptjs');
-const Payment = require('../models/Payment');
-const Offer = require('../models/Offer');
 const prisma = require('../config/db');
 const darajaService = require('./darajaService');
 const offerService = require('./offerService');
@@ -19,32 +17,29 @@ class PaymentServiceError extends Error {
   }
 }
 
-function toPlain(document) {
-  if (!document) return null;
-  if (typeof document.toObject === 'function') {
-    return document.toObject({ virtuals: false, versionKey: false });
+function normalizeOfferIdentifier(identifier) {
+  if (typeof identifier === 'number') {
+    if (Number.isSafeInteger(identifier) && identifier > 0) return identifier;
+    throw new PaymentServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
   }
-  return { ...document };
-}
 
-function documentId(document) {
-  return document?._id ?? document?.id;
-}
-
-function identifierFilter(identifier) {
   const normalized = typeof identifier === 'string' ? identifier.trim() : '';
   if (!normalized || normalized.length > 80) {
     throw new PaymentServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
   }
-  if (/^[a-f\d]{24}$/i.test(normalized)) return { _id: normalized };
-  return { reference: normalized.toUpperCase() };
+  if (/^\d+$/.test(normalized)) {
+    const parsed = Number(normalized);
+    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+    throw new PaymentServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
+  }
+  return normalized.toUpperCase();
 }
 
-function offerDocumentFilter(offer) {
-  const id = documentId(offer);
-  if (id) return { _id: id };
-  if (offer?.reference) return { reference: offer.reference };
-  throw new PaymentServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
+function offerIdentifierWhere(identifier) {
+  const normalized = normalizeOfferIdentifier(identifier);
+  return typeof normalized === 'number'
+    ? { id: normalized }
+    : { reference: normalized };
 }
 
 function normalizeReference(value) {
@@ -57,12 +52,6 @@ function normalizeReference(value) {
     );
   }
   return reference;
-}
-
-function sameIdentifier(left, right) {
-  return left !== null && left !== undefined
-    && right !== null && right !== undefined
-    && String(left) === String(right);
 }
 
 function purposeForOffer(offer) {
@@ -88,11 +77,7 @@ function calculatePayoutAmounts(offer) {
     if (!Number.isSafeInteger(payoutAmount) || payoutAmount <= 0) {
       throw new PaymentServiceError(409, 'Calculated payout is invalid', 'INVALID_PAYOUT_AMOUNT');
     }
-    return {
-      grossAmount,
-      commissionAmount: 0,
-      payoutAmount,
-    };
+    return { grossAmount, commissionAmount: 0, payoutAmount };
   }
 
   if (offer.tradeType === 'consignment') {
@@ -117,28 +102,27 @@ function calculatePayoutAmounts(offer) {
 }
 
 function sanitizePayment(payment) {
-  const source = toPlain(payment);
-  if (!source) return null;
+  if (!payment) return null;
   return {
-    id: String(documentId(source)),
-    offerId: String(source.offerId),
-    farmerId: source.farmerId,
-    amount: source.amount,
-    method: source.method,
-    reference: source.reference,
-    purpose: source.purpose,
-    status: source.status,
-    originatorConversationId: source.originatorConversationId ?? null,
-    conversationId: source.conversationId ?? null,
-    transactionId: source.transactionId ?? null,
-    resultCode: source.resultCode ?? null,
-    resultDescription: source.resultDescription ?? null,
-    requestedAt: source.requestedAt,
-    submittedAt: source.submittedAt ?? null,
-    completedAt: source.completedAt ?? null,
-    failedAt: source.failedAt ?? null,
-    createdAt: source.createdAt,
-    updatedAt: source.updatedAt,
+    id: payment.id,
+    offerId: payment.offerId,
+    farmerId: payment.farmerId,
+    amount: payment.amount,
+    method: payment.method,
+    reference: payment.reference,
+    purpose: payment.purpose,
+    status: payment.status,
+    originatorConversationId: payment.originatorConversationId ?? null,
+    conversationId: payment.conversationId ?? null,
+    transactionId: payment.transactionId ?? null,
+    resultCode: payment.resultCode ?? null,
+    resultDescription: payment.resultDescription ?? null,
+    requestedAt: payment.requestedAt,
+    submittedAt: payment.submittedAt ?? null,
+    completedAt: payment.completedAt ?? null,
+    failedAt: payment.failedAt ?? null,
+    createdAt: payment.createdAt,
+    updatedAt: payment.updatedAt,
   };
 }
 
@@ -188,15 +172,14 @@ function assertEligible(offer, farmer) {
   }
 }
 
-function duplicateKey(error) {
-  return error?.code === 11000 || error?.code === '11000';
+function uniqueConstraint(error) {
+  return error?.code === 'P2002';
 }
 
-async function findExistingPayment({ offerId, purpose, reference }) {
-  const byReference = await Payment.findOne({ reference });
+async function findExistingPayment(client, { offerId, purpose, reference }) {
+  const byReference = await client.payment.findUnique({ where: { reference } });
   if (byReference) {
-    const existing = toPlain(byReference);
-    if (!sameIdentifier(existing.offerId, offerId) || existing.purpose !== purpose) {
+    if (byReference.offerId !== offerId || byReference.purpose !== purpose) {
       throw new PaymentServiceError(
         409,
         'Payment reference is already used by another payout',
@@ -206,7 +189,7 @@ async function findExistingPayment({ offerId, purpose, reference }) {
     return byReference;
   }
 
-  const byOffer = await Payment.findOne({ offerId, purpose });
+  const byOffer = await client.payment.findFirst({ where: { offerId, purpose } });
   if (byOffer) {
     throw new PaymentServiceError(
       409,
@@ -218,27 +201,45 @@ async function findExistingPayment({ offerId, purpose, reference }) {
 }
 
 async function resolveCreateConflict({ offerId, purpose, reference }) {
-  const byReference = await Payment.findOne({ reference });
-  if (byReference) {
-    const existing = toPlain(byReference);
-    if (sameIdentifier(existing.offerId, offerId) && existing.purpose === purpose) {
-      return byReference;
-    }
-    throw new PaymentServiceError(
-      409,
-      'Payment reference is already used by another payout',
-      'PAYMENT_REFERENCE_CONFLICT'
-    );
-  }
-  const byOffer = await Payment.findOne({ offerId, purpose });
-  if (byOffer) {
-    throw new PaymentServiceError(
-      409,
-      'A payout ledger already exists for this offer and purpose',
-      'PAYOUT_ALREADY_EXISTS'
-    );
-  }
+  const existing = await findExistingPayment(prisma, { offerId, purpose, reference });
+  if (existing) return existing;
   throw new PaymentServiceError(409, 'Payout could not be created safely', 'PAYOUT_CREATE_CONFLICT');
+}
+
+async function createPaymentLedger({ offer, purpose, reference, amount }) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const existing = await findExistingPayment(tx, {
+        offerId: offer.id,
+        purpose,
+        reference,
+      });
+      if (existing) return { payment: existing, created: false };
+
+      const payment = await tx.payment.create({
+        data: {
+          offerId: offer.id,
+          farmerId: offer.farmerId,
+          cooperativeId: offer.cooperativeId,
+          amount,
+          method: 'daraja_b2c',
+          reference,
+          purpose,
+          status: 'pending',
+          requestedAt: new Date(),
+        },
+      });
+      return { payment, created: true };
+    });
+  } catch (err) {
+    if (!uniqueConstraint(err)) throw err;
+    const payment = await resolveCreateConflict({
+      offerId: offer.id,
+      purpose,
+      reference,
+    });
+    return { payment, created: false };
+  }
 }
 
 async function sendFailureSms(farmer, payment, description) {
@@ -250,19 +251,18 @@ async function sendFailureSms(farmer, payment, description) {
       description,
     });
   } catch (err) {
-    logger.warn('Payout failure SMS failed', { paymentId: String(documentId(payment)) });
+    logger.warn('Payout failure SMS failed', { paymentId: payment.id });
   }
 }
 
 async function initiatePayoutForOffer({ offer, reference, farmer: suppliedFarmer }) {
-  const offerId = documentId(offer);
-  if (!offerId) {
+  if (!Number.isSafeInteger(offer?.id) || offer.id <= 0) {
     throw new PaymentServiceError(400, 'Offer ID is invalid', 'INVALID_OFFER_ID');
   }
   const normalizedReference = normalizeReference(reference);
   const purpose = purposeForOffer(offer);
-  const existing = await findExistingPayment({
-    offerId,
+  const existing = await findExistingPayment(prisma, {
+    offerId: offer.id,
     purpose,
     reference: normalizedReference,
   });
@@ -278,33 +278,22 @@ async function initiatePayoutForOffer({ offer, reference, farmer: suppliedFarmer
   const farmer = suppliedFarmer || await loadFarmer(offer.farmerId);
   assertEligible(offer, farmer);
   const amounts = calculatePayoutAmounts(offer);
-  let created;
-  try {
-    created = await Payment.create({
-      offerId,
-      farmerId: offer.farmerId,
-      amount: amounts.payoutAmount,
-      method: 'daraja_b2c',
-      reference: normalizedReference,
-      purpose,
-      status: 'pending',
-      requestedAt: new Date(),
-    });
-  } catch (err) {
-    if (!duplicateKey(err)) throw err;
-    const concurrent = await resolveCreateConflict({
-      offerId,
-      purpose,
-      reference: normalizedReference,
-    });
+  const ledger = await createPaymentLedger({
+    offer,
+    purpose,
+    reference: normalizedReference,
+    amount: amounts.payoutAmount,
+  });
+  if (!ledger.created) {
     return {
-      payment: sanitizePayment(concurrent),
+      payment: sanitizePayment(ledger.payment),
       amounts,
       created: false,
       idempotent: true,
     };
   }
 
+  const created = ledger.payment;
   try {
     const provider = await darajaService.requestB2CPayout({
       amount: amounts.payoutAmount,
@@ -313,30 +302,20 @@ async function initiatePayoutForOffer({ offer, reference, farmer: suppliedFarmer
       remarks: `NectarTrace ${purpose} ${normalizedReference}`,
     });
     const submittedAt = new Date();
-    const submitted = await Payment.findOneAndUpdate({
-      _id: documentId(created),
-      status: 'pending',
-    }, {
-      $set: {
+    const transition = await prisma.payment.updateMany({
+      where: { id: created.id, status: 'pending' },
+      data: {
         status: 'submitted',
         originatorConversationId: provider.originatorConversationId || null,
         conversationId: provider.conversationId || null,
         submittedAt,
       },
-    }, { new: true, runValidators: true });
-
-    if (!submitted) {
-      const current = await Payment.findOne({ reference: normalizedReference });
-      if (current && toPlain(current).status !== 'pending') {
-        return {
-          payment: sanitizePayment(current),
-          amounts,
-          created: true,
-          idempotent: false,
-        };
-      }
+    });
+    const submitted = await prisma.payment.findUnique({ where: { id: created.id } });
+    if (transition.count !== 1 && submitted?.status === 'pending') {
       throw new Error('Payment ledger transition failed');
     }
+    if (!submitted) throw new Error('Payment ledger disappeared');
     return {
       payment: sanitizePayment(submitted),
       amounts,
@@ -344,42 +323,38 @@ async function initiatePayoutForOffer({ offer, reference, farmer: suppliedFarmer
       idempotent: false,
     };
   } catch (err) {
-    // Provider exceptions are ambiguous. Automatic retries are intentionally disabled;
-    // manual reconciliation is future work.
+    // A provider exception is ambiguous, so this ledger is closed for manual reconciliation.
     const failedAt = new Date();
     let failed = null;
     try {
-      failed = await Payment.findOneAndUpdate({
-        _id: documentId(created),
-        status: 'pending',
-      }, {
-        $set: {
+      await prisma.payment.updateMany({
+        where: { id: created.id, status: 'pending' },
+        data: {
           status: 'failed',
           resultDescription: SAFE_PROVIDER_FAILURE,
           failedAt,
           completedAt: failedAt,
         },
-      }, { new: true, runValidators: true });
+      });
+      failed = await prisma.payment.findUnique({ where: { id: created.id } });
     } catch (transitionError) {
-      logger.error('Payment failure transition failed', { paymentId: String(documentId(created)) });
+      logger.error('Payment failure transition failed', { paymentId: created.id });
     }
-    if (failed) await sendFailureSms(farmer, toPlain(failed), SAFE_PROVIDER_FAILURE);
-    logger.warn('Daraja B2C request failed', { paymentId: String(documentId(created)) });
-    const safePayment = sanitizePayment(failed || created);
+    if (failed?.status === 'failed') {
+      await sendFailureSms(farmer, failed, SAFE_PROVIDER_FAILURE);
+    }
+    logger.warn('Daraja B2C request failed', { paymentId: created.id });
     throw new PaymentServiceError(
       502,
       'Payout submission failed; manual reconciliation is required',
       'DARAJA_SUBMISSION_FAILED',
-      safePayment
+      sanitizePayment(failed || created)
     );
   }
 }
 
 async function initiatePayout({ offerIdentifier, user, reference }) {
-  const normalizedIdentifier = typeof offerIdentifier === 'string'
-    ? offerIdentifier.trim()
-    : String(offerIdentifier || '');
-  identifierFilter(normalizedIdentifier);
+  const normalizedIdentifier = normalizeOfferIdentifier(offerIdentifier);
   const { offer } = await offerService.loadManagedOffer(normalizedIdentifier, user);
   return initiatePayoutForOffer({ offer, reference });
 }
@@ -391,6 +366,7 @@ async function recordConsignmentSaleAndPayout({
   reference,
 }) {
   const normalizedReference = normalizeReference(reference);
+  const normalizedIdentifier = normalizeOfferIdentifier(offerIdentifier);
   const grossAmount = Number(saleAmount);
   if (!Number.isFinite(grossAmount) || grossAmount <= 0) {
     throw new PaymentServiceError(
@@ -400,7 +376,7 @@ async function recordConsignmentSaleAndPayout({
     );
   }
 
-  const { offer: loadedOffer } = await offerService.loadManagedOffer(offerIdentifier, user);
+  const { offer: loadedOffer } = await offerService.loadManagedOffer(normalizedIdentifier, user);
   if (loadedOffer.tradeType !== 'consignment') {
     throw new PaymentServiceError(
       409,
@@ -432,35 +408,28 @@ async function recordConsignmentSaleAndPayout({
       );
     }
   } else {
-    const updated = await Offer.findOneAndUpdate({
-      ...offerDocumentFilter(loadedOffer),
-      tradeType: 'consignment',
-      status: 'verified',
-      $or: [
-        { saleAmount: null },
-        { saleAmount: { $exists: false } },
-      ],
-    }, {
-      $set: { saleAmount: grossAmount },
-    }, { new: true, runValidators: true });
-
-    if (updated) {
-      offer = toPlain(updated);
-      saleRecorded = true;
-    } else {
-      const current = toPlain(await Offer.findOne(identifierFilter(offerIdentifier)));
-      if (!current || current.tradeType !== 'consignment') {
-        throw new PaymentServiceError(409, 'Offer changed before sale recording', 'OFFER_CONFLICT');
-      }
-      if (Number(current.saleAmount) !== grossAmount) {
-        throw new PaymentServiceError(
-          409,
-          'saleAmount has already been recorded and cannot be changed',
-          'SALE_ALREADY_RECORDED'
-        );
-      }
-      offer = current;
+    const update = await prisma.offer.updateMany({
+      where: {
+        id: loadedOffer.id,
+        tradeType: 'consignment',
+        status: 'verified',
+        saleAmount: null,
+      },
+      data: { saleAmount: grossAmount },
+    });
+    const current = await prisma.offer.findUnique({ where: { id: loadedOffer.id } });
+    if (!current || current.tradeType !== 'consignment') {
+      throw new PaymentServiceError(409, 'Offer changed before sale recording', 'OFFER_CONFLICT');
     }
+    if (Number(current.saleAmount) !== grossAmount) {
+      throw new PaymentServiceError(
+        409,
+        'saleAmount has already been recorded and cannot be changed',
+        'SALE_ALREADY_RECORDED'
+      );
+    }
+    offer = current;
+    saleRecorded = update.count === 1;
   }
 
   const amounts = calculatePayoutAmounts(offer);
@@ -473,7 +442,7 @@ async function recordConsignmentSaleAndPayout({
         payoutAmount: amounts.payoutAmount,
       });
     } catch (err) {
-      logger.warn('Consignment sale SMS failed', { offerId: String(documentId(offer)) });
+      logger.warn('Consignment sale SMS failed', { offerId: offer.id });
     }
   }
 
@@ -482,19 +451,15 @@ async function recordConsignmentSaleAndPayout({
     reference: normalizedReference,
     farmer,
   });
-  return {
-    ...payout,
-    amounts,
-    saleRecorded,
-  };
+  return { ...payout, amounts, saleRecorded };
 }
 
 async function confirmPaymentDetails({ offerIdentifier, farmerId, pin, now = new Date() }) {
   if (typeof pin !== 'string' || !/^\d{4}$/.test(pin)) {
     throw new PaymentServiceError(400, 'A 4-digit PIN is required', 'PIN_REQUIRED');
   }
-  const filter = { ...identifierFilter(offerIdentifier), farmerId };
-  const offer = toPlain(await Offer.findOne(filter));
+  const where = { ...offerIdentifierWhere(offerIdentifier), farmerId };
+  const offer = await prisma.offer.findFirst({ where });
   if (!offer) {
     throw new PaymentServiceError(404, 'Offer not found', 'OFFER_NOT_FOUND');
   }
@@ -523,46 +488,45 @@ async function confirmPaymentDetails({ offerIdentifier, farmerId, pin, now = new
     throw new PaymentServiceError(401, 'PIN is incorrect', 'INVALID_PIN');
   }
 
-  const confirmed = await Offer.findOneAndUpdate({
-    ...filter,
-    status: { $ne: 'paid' },
-  }, {
-    $set: { paymentDetailsConfirmedAt: now },
-  }, { new: true, runValidators: true });
-  if (!confirmed) {
+  const result = await prisma.offer.updateMany({
+    where: { id: offer.id, farmerId, status: { not: 'paid' } },
+    data: { paymentDetailsConfirmedAt: now },
+  });
+  if (result.count !== 1) {
     throw new PaymentServiceError(409, 'Offer changed before confirmation', 'OFFER_CONFLICT');
   }
-  return {
-    offerId: String(documentId(confirmed)),
-    paymentDetailsConfirmedAt: toPlain(confirmed).paymentDetailsConfirmedAt,
-  };
+  return { offerId: offer.id, paymentDetailsConfirmedAt: now };
 }
 
 async function invalidatePaymentDetailsForFarmer(farmerId) {
-  return Offer.updateMany({
-    farmerId,
-    status: { $ne: 'paid' },
-    paymentDetailsConfirmedAt: { $ne: null },
-  }, {
-    $set: { paymentDetailsConfirmedAt: null },
-  }, { runValidators: true });
+  return prisma.offer.updateMany({
+    where: {
+      farmerId,
+      status: { not: 'paid' },
+      paymentDetailsConfirmedAt: { not: null },
+    },
+    data: { paymentDetailsConfirmedAt: null },
+  });
 }
 
 async function getOfferPayment({ offerIdentifier, user }) {
   let offer;
+  const normalizedIdentifier = normalizeOfferIdentifier(offerIdentifier);
   if (user.role === 'FARMER') {
-    offer = toPlain(await Offer.findOne({
-      ...identifierFilter(offerIdentifier),
-      farmerId: user.id,
-    }));
+    offer = await prisma.offer.findFirst({
+      where: {
+        ...offerIdentifierWhere(normalizedIdentifier),
+        farmerId: user.id,
+      },
+    });
     if (!offer) {
       throw new PaymentServiceError(404, 'Offer not found', 'OFFER_NOT_FOUND');
     }
   } else {
-    ({ offer } = await offerService.loadManagedOffer(offerIdentifier, user));
+    ({ offer } = await offerService.loadManagedOffer(normalizedIdentifier, user));
   }
 
-  const payment = await Payment.findOne({ offerId: documentId(offer) });
+  const payment = await prisma.payment.findFirst({ where: { offerId: offer.id } });
   if (!payment) {
     throw new PaymentServiceError(404, 'Payment not found', 'PAYMENT_NOT_FOUND');
   }
@@ -646,11 +610,11 @@ async function findCallbackPayment(data) {
   if (data.conversationId) alternatives.push({ conversationId: data.conversationId });
   if (data.reference) alternatives.push({ reference: data.reference });
   if (alternatives.length === 0) return null;
-  return Payment.findOne({ $or: alternatives });
+  return prisma.payment.findFirst({ where: { OR: alternatives } });
 }
 
-function callbackUpdate(data, status, now) {
-  const set = {
+function callbackData(data, status, now) {
+  return {
     status,
     completedAt: now,
     ...(data.originatorConversationId && {
@@ -660,18 +624,8 @@ function callbackUpdate(data, status, now) {
     ...(data.transactionId && { transactionId: data.transactionId }),
     ...(data.resultCode !== null && { resultCode: data.resultCode }),
     ...(data.resultDescription && { resultDescription: data.resultDescription }),
+    ...((status === 'failed' || status === 'timeout') && { failedAt: now }),
   };
-  if (status === 'failed' || status === 'timeout') set.failedAt = now;
-  return { $set: set };
-}
-
-async function markOfferPaid(payment, now) {
-  await Offer.updateOne({
-    _id: payment.offerId,
-    status: 'verified',
-  }, {
-    $set: { status: 'paid', paidAt: now },
-  }, { runValidators: true });
 }
 
 async function sendCallbackSms(payment, status, description) {
@@ -692,7 +646,7 @@ async function sendCallbackSms(payment, status, description) {
       });
     }
   } catch (err) {
-    logger.warn('Payout callback SMS failed', { paymentId: String(documentId(payment)) });
+    logger.warn('Payout callback SMS failed', { paymentId: payment.id });
   }
 }
 
@@ -701,32 +655,37 @@ async function processDarajaCallback({ payload, type, now = new Date() }) {
   const found = await findCallbackPayment(data);
   if (!found) return { matched: false, changed: false };
 
-  const current = toPlain(found);
-  let status;
-  if (type === 'timeout') {
-    status = 'timeout';
-  } else {
-    status = String(data.resultCode) === '0' ? 'succeeded' : 'failed';
-  }
+  const status = type === 'timeout'
+    ? 'timeout'
+    : (String(data.resultCode) === '0' ? 'succeeded' : 'failed');
   const description = data.resultDescription
     || (status === 'timeout' ? 'Daraja payout timed out' : 'Daraja payout failed');
   data.resultDescription = description;
 
-  const transitioned = await Payment.findOneAndUpdate({
-    _id: documentId(current),
-    status: { $in: ['pending', 'submitted'] },
-  }, callbackUpdate(data, status, now), { new: true, runValidators: true });
-  if (!transitioned) {
+  const transition = await prisma.$transaction(async (tx) => {
+    const result = await tx.payment.updateMany({
+      where: { id: found.id, status: { in: ['pending', 'submitted'] } },
+      data: callbackData(data, status, now),
+    });
+    const payment = await tx.payment.findUnique({ where: { id: found.id } });
+    if (result.count !== 1) return { changed: false, payment };
+    if (status === 'succeeded') {
+      await tx.offer.updateMany({
+        where: { id: payment.offerId, status: 'verified' },
+        data: { status: 'paid', paidAt: now },
+      });
+    }
+    return { changed: true, payment };
+  });
+
+  if (!transition.changed) {
     return {
       matched: true,
       changed: false,
-      status: current.status,
+      status: transition.payment?.status ?? found.status,
     };
   }
-
-  const payment = toPlain(transitioned);
-  if (status === 'succeeded') await markOfferPaid(payment, now);
-  await sendCallbackSms(payment, status, description);
+  await sendCallbackSms(transition.payment, status, description);
   return { matched: true, changed: true, status };
 }
 
@@ -738,6 +697,7 @@ module.exports = {
   getOfferPayment,
   initiatePayout,
   invalidatePaymentDetailsForFarmer,
+  normalizeOfferIdentifier,
   normalizeReference,
   parseCallback,
   processDarajaCallback,

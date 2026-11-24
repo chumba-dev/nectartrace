@@ -1,9 +1,7 @@
 const prisma = require('../config/db');
 const blockchain = require('../config/blockchain');
 const logger = require('../utils/logger');
-const Offer = require('../models/Offer');
 const { randomUUID } = require('crypto');
-const { Types } = require('mongoose');
 const QRCode = require('qrcode');
 const { validateBatchInput } = require('../utils/batchValidation');
 const { computeLotIdsHash } = require('../utils/lotIdsHash');
@@ -28,20 +26,15 @@ function parsePositiveInteger(value) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function toPlainOffer(document) {
-  return typeof document?.toObject === 'function'
-    ? document.toObject({ virtuals: false, versionKey: false })
-    : document;
-}
-
 function updatedCount(result) {
-  return result?.modifiedCount ?? result?.nModified ?? result?.matchedCount ?? 0;
+  return result?.count ?? 0;
 }
 
 async function releaseReservation(batchReservationToken, expectedCount) {
-  const result = await Offer.updateMany({ batchReservationToken }, {
-    $set: { batchId: null, batchReservationToken: null },
-  }, { runValidators: true });
+  const result = await prisma.offer.updateMany({
+    where: { batchReservationToken },
+    data: { batchReservationToken: null },
+  });
   if (updatedCount(result) !== expectedCount) {
     throw new Error('Reservation release count mismatch');
   }
@@ -105,7 +98,7 @@ async function resolveBatchCooperative(req) {
 }
 
 // POST /api/batches
-// Records one aggregate batch commitment for verified, measured Mongo offers.
+// Records one aggregate batch commitment for verified, measured offers.
 async function createBatch(req, res, next) {
   try {
     const validation = validateBatchInput(req.body);
@@ -145,12 +138,19 @@ async function createBatch(req, res, next) {
       });
     }
 
-    const objectIds = offerIds.map((id) => new Types.ObjectId(id));
-    const documents = await Offer.find({ _id: { $in: objectIds } });
-    const offersById = new Map(documents.map((document) => {
-      const offer = toPlainOffer(document);
-      return [String(offer._id ?? offer.id).toLowerCase(), offer];
-    }));
+    const documents = await prisma.offer.findMany({
+      where: { id: { in: offerIds } },
+      select: {
+        id: true,
+        cooperativeId: true,
+        status: true,
+        weighedKg: true,
+        moisturePercent: true,
+        batchId: true,
+        batchReservationToken: true,
+      },
+    });
+    const offersById = new Map(documents.map((offer) => [offer.id, offer]));
     if (offersById.size !== offerIds.length || offerIds.some((id) => !offersById.has(id))) {
       return res.status(404).json({
         success: false,
@@ -159,7 +159,7 @@ async function createBatch(req, res, next) {
       });
     }
 
-    const sortedOfferIds = [...offerIds].sort();
+    const sortedOfferIds = [...offerIds].sort((left, right) => left - right);
     const offers = sortedOfferIds.map((id) => offersById.get(id));
     if (offers.some((offer) => offer.cooperativeId !== cooperative.id)) {
       return res.status(403).json({
@@ -176,11 +176,11 @@ async function createBatch(req, res, next) {
       });
     }
     if (offers.some((offer) => (
-      !Number.isFinite(offer.weighedKg)
-      || offer.weighedKg <= 0
-      || !Number.isFinite(offer.moisturePercent)
-      || offer.moisturePercent <= 0
-      || offer.moisturePercent >= 100
+      !Number.isFinite(Number(offer.weighedKg))
+      || Number(offer.weighedKg) <= 0
+      || !Number.isFinite(Number(offer.moisturePercent))
+      || Number(offer.moisturePercent) <= 0
+      || Number(offer.moisturePercent) >= 100
     ))) {
       return res.status(409).json({
         success: false,
@@ -195,10 +195,17 @@ async function createBatch(req, res, next) {
         code: 'OFFERS_ALREADY_BATCHED',
       });
     }
+    if (offers.some((offer) => offer.batchReservationToken !== null)) {
+      return res.status(409).json({
+        success: false,
+        message: 'One or more offers are reserved by another batch request',
+        code: 'OFFER_RESERVATION_CONFLICT',
+      });
+    }
 
-    const weightKg = offers.reduce((sum, offer) => sum + offer.weighedKg, 0);
+    const weightKg = offers.reduce((sum, offer) => sum + Number(offer.weighedKg), 0);
     const weightedMoistureTotal = offers.reduce(
-      (sum, offer) => sum + (offer.weighedKg * offer.moisturePercent),
+      (sum, offer) => sum + (Number(offer.weighedKg) * Number(offer.moisturePercent)),
       0
     );
     const weightGrams = Math.round(weightKg * 1000);
@@ -220,19 +227,18 @@ async function createBatch(req, res, next) {
     }
     const lotIdsHash = computeLotIdsHash(sortedOfferIds);
     const batchReservationToken = randomUUID();
-    const reservation = await Offer.updateMany({
-      _id: { $in: objectIds },
-      cooperativeId: cooperative.id,
-      status: 'verified',
-      batchId: null,
-      weighedKg: { $gt: 0 },
-      moisturePercent: { $gt: 0, $lt: 100 },
-    }, {
-      $set: {
-        batchId: normalizedBatchId,
-        batchReservationToken,
+    const reservation = await prisma.offer.updateMany({
+      where: {
+        id: { in: sortedOfferIds },
+        cooperativeId: cooperative.id,
+        status: 'verified',
+        batchId: null,
+        batchReservationToken: null,
+        weighedKg: { gt: 0 },
+        moisturePercent: { gt: 0, lt: 100 },
       },
-    }, { runValidators: true });
+      data: { batchReservationToken },
+    });
 
     const reservationCount = updatedCount(reservation);
     if (reservationCount !== offerIds.length) {
@@ -284,20 +290,37 @@ async function createBatch(req, res, next) {
 
     let batch;
     try {
-      batch = await prisma.honeyBatch.create({
-        data: {
-          batchId: normalizedBatchId,
-          cooperativeId: cooperative.id,
-          village: normalizedVillage,
-          harvestDate: parsedHarvestDate,
-          moistureContent: moisturePercent,
-          weightKg,
-          pricePerKg: parsedPrice,
-          blockchainTxHash: blockchainResult.txHash,
-          lotIdsHash,
-          createdByUserId: req.user.id,
-        },
-        include: { cooperative: true },
+      batch = await prisma.$transaction(async (tx) => {
+        const created = await tx.honeyBatch.create({
+          data: {
+            batchId: normalizedBatchId,
+            cooperativeId: cooperative.id,
+            village: normalizedVillage,
+            harvestDate: parsedHarvestDate,
+            moistureContent: moisturePercent,
+            weightKg,
+            pricePerKg: parsedPrice,
+            blockchainTxHash: blockchainResult.txHash,
+            lotIdsHash,
+            createdByUserId: req.user.id,
+          },
+          include: { cooperative: true },
+        });
+        const assignment = await tx.offer.updateMany({
+          where: {
+            id: { in: sortedOfferIds },
+            batchReservationToken,
+            batchId: null,
+          },
+          data: {
+            batchId: created.id,
+            batchReservationToken: null,
+          },
+        });
+        if (assignment.count !== sortedOfferIds.length) {
+          throw new Error('Reserved offer assignment count mismatch');
+        }
+        return created;
       });
     } catch (err) {
       logger.error('Confirmed chain batch was not persisted in PostgreSQL', {
@@ -314,17 +337,6 @@ async function createBatch(req, res, next) {
           lotIdsHash,
         },
       });
-    }
-
-    try {
-      await Offer.updateMany({
-        batchId: normalizedBatchId,
-        batchReservationToken,
-      }, {
-        $set: { batchReservationToken: null },
-      }, { runValidators: true });
-    } catch (err) {
-      logger.warn('Batch reservation token cleanup failed', { batchId: normalizedBatchId });
     }
 
     logger.info('Batch created', {

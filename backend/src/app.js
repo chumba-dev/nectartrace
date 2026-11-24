@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const { notFound, errorHandler } = require('./middleware/errorHandler');
 const prisma = require('./config/db');
-const { getMongoConnectionStatus } = require('./config/mongo');
 const ussdRoutes = require('./routes/ussd');
 const adminRoutes = require('./routes/admin');
 
@@ -47,7 +46,6 @@ app.get('/api/health', async (req, res) => {
     environment: process.env.NODE_ENV,
     checks: {
       database: 'unknown',
-      mongodb: getMongoConnectionStatus(),
       blockchain: 'unknown',
     },
   };
@@ -58,10 +56,6 @@ app.get('/api/health', async (req, res) => {
     health.checks.database = 'ok';
   } catch (err) {
     health.checks.database = 'error';
-    health.status = 'degraded';
-  }
-
-  if (health.checks.mongodb !== 'connected') {
     health.status = 'degraded';
   }
 

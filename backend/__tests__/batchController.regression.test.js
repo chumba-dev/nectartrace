@@ -4,6 +4,11 @@ const mockPrisma = {
     findUnique: jest.fn(),
     create: jest.fn(),
   },
+  offer: {
+    findMany: jest.fn(),
+    updateMany: jest.fn(),
+  },
+  $transaction: jest.fn(),
 };
 
 const mockBlockchain = {
@@ -11,14 +16,8 @@ const mockBlockchain = {
   getBatchFromChain: jest.fn(),
 };
 
-const mockOfferModel = {
-  find: jest.fn(),
-  updateMany: jest.fn(),
-};
-
 jest.mock('../src/config/db', () => mockPrisma);
 jest.mock('../src/config/blockchain', () => mockBlockchain);
-jest.mock('../src/models/Offer', () => mockOfferModel);
 jest.mock('../src/utils/logger', () => ({
   info: jest.fn(),
   warn: jest.fn(),
@@ -36,8 +35,8 @@ app.use(express.json());
 app.use('/batches', batchRouter);
 app.use((err, req, res, next) => res.status(500).json({ message: err.message }));
 
-const firstOfferId = '64b64c2f3f3f3f3f3f3f3f3f';
-const secondOfferId = '74b64c2f3f3f3f3f3f3f3f3f';
+const firstOfferId = 2;
+const secondOfferId = 11;
 const expectedLotIdsHash = computeLotIdsHash([firstOfferId, secondOfferId]);
 
 const validBody = {
@@ -56,13 +55,14 @@ const cooperative = {
 
 function offer(id, overrides = {}) {
   return {
-    _id: id,
+    id,
     farmerId: 4,
     cooperativeId: 2,
     status: 'verified',
     weighedKg: id === firstOfferId ? 12.345 : 7.655,
     moisturePercent: id === firstOfferId ? 18 : 20,
     batchId: null,
+    batchReservationToken: null,
     ...overrides,
   };
 }
@@ -87,13 +87,14 @@ async function runCreate({ body = validBody, user } = {}) {
 
 beforeEach(() => {
   jest.resetAllMocks();
+  mockPrisma.$transaction.mockImplementation(async (operation) => operation(mockPrisma));
   mockPrisma.cooperative.findUnique.mockResolvedValue(cooperative);
   mockPrisma.honeyBatch.findUnique.mockResolvedValue(null);
-  mockOfferModel.find.mockResolvedValue([
+  mockPrisma.offer.findMany.mockResolvedValue([
     offer(firstOfferId),
     offer(secondOfferId),
   ]);
-  mockOfferModel.updateMany.mockResolvedValue({ modifiedCount: 2 });
+  mockPrisma.offer.updateMany.mockResolvedValue({ count: 2 });
   mockBlockchain.recordBatchOnChain.mockResolvedValue({
     txHash: '0xabc',
     blockNumber: 12,
@@ -105,7 +106,7 @@ beforeEach(() => {
   }));
 });
 
-test('manual batch calls without offers fail clearly before database or blockchain work', async () => {
+test('manual batch calls without offer IDs fail before database or blockchain work', async () => {
   const { res, next } = await runCreate({
     body: {
       batchId: validBody.batchId,
@@ -119,10 +120,10 @@ test('manual batch calls without offers fail clearly before database or blockcha
   expect(res.status).toHaveBeenCalledWith(400);
   expect(res.json).toHaveBeenCalledWith({
     success: false,
-    message: 'offerIds must be a nonempty array of Mongo Offer ObjectIds',
+    message: 'offerIds must be a nonempty array of positive integer Offer IDs',
   });
   expect(mockPrisma.cooperative.findUnique).not.toHaveBeenCalled();
-  expect(mockOfferModel.find).not.toHaveBeenCalled();
+  expect(mockPrisma.offer.findMany).not.toHaveBeenCalled();
   expect(mockBlockchain.recordBatchOnChain).not.toHaveBeenCalled();
   expect(next).not.toHaveBeenCalled();
 });
@@ -137,26 +138,31 @@ test.each([
   ['a zero price', { pricePerKg: 0 }, 'pricePerKg must be greater than 0 when supplied'],
   [
     'duplicate offer IDs',
-    { offerIds: [firstOfferId, firstOfferId.toUpperCase()] },
+    { offerIds: [firstOfferId, String(firstOfferId)] },
     'Lot IDs must be unique',
+  ],
+  [
+    'an unsafe offer ID',
+    { offerIds: [Number.MAX_SAFE_INTEGER + 1] },
+    'offerIds must contain only positive safe integer Offer IDs',
   ],
 ])('rejects %s before reserving offers', async (description, override, message) => {
   const { res } = await runCreate({ body: { ...validBody, ...override } });
 
   expect(res.status).toHaveBeenCalledWith(400);
   expect(res.json).toHaveBeenCalledWith({ success: false, message });
-  expect(mockOfferModel.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.offer.updateMany).not.toHaveBeenCalled();
   expect(mockBlockchain.recordBatchOnChain).not.toHaveBeenCalled();
 });
 
-test('requires every requested Mongo Offer ObjectId to resolve', async () => {
-  mockOfferModel.find.mockResolvedValue([offer(firstOfferId)]);
+test('requires every requested integer Offer ID to resolve', async () => {
+  mockPrisma.offer.findMany.mockResolvedValue([offer(firstOfferId)]);
 
   const { res } = await runCreate();
 
   expect(res.status).toHaveBeenCalledWith(404);
   expect(res.json.mock.calls[0][0].code).toBe('OFFERS_NOT_FOUND');
-  expect(mockOfferModel.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.offer.updateMany).not.toHaveBeenCalled();
 });
 
 test.each([
@@ -180,22 +186,28 @@ test.each([
   ],
   [
     'already-batched',
-    [offer(firstOfferId, { batchId: 'BAR-2026-999' }), offer(secondOfferId)],
+    [offer(firstOfferId, { batchId: 9 }), offer(secondOfferId)],
     409,
     'OFFERS_ALREADY_BATCHED',
   ],
+  [
+    'already-reserved',
+    [offer(firstOfferId, { batchReservationToken: 'other-request' }), offer(secondOfferId)],
+    409,
+    'OFFER_RESERVATION_CONFLICT',
+  ],
 ])('rejects %s lots before chain submission', async (description, offers, status, code) => {
-  mockOfferModel.find.mockResolvedValue(offers);
+  mockPrisma.offer.findMany.mockResolvedValue(offers);
 
   const { res } = await runCreate();
 
   expect(res.status).toHaveBeenCalledWith(status);
   expect(res.json.mock.calls[0][0].code).toBe(code);
-  expect(mockOfferModel.updateMany).not.toHaveBeenCalled();
+  expect(mockPrisma.offer.updateMany).not.toHaveBeenCalled();
   expect(mockBlockchain.recordBatchOnChain).not.toHaveBeenCalled();
 });
 
-test('derives authoritative weight, weighted moisture, and lot hash from Mongo offers', async () => {
+test('derives authoritative weight, weighted moisture, and lot hash from Prisma offers', async () => {
   const { res, next } = await runCreate({
     body: {
       ...validBody,
@@ -225,32 +237,40 @@ test('derives authoritative weight, weighted moisture, and lot hash from Mongo o
       blockchainTxHash: '0xabc',
     }),
   }));
-  const reservationUpdate = mockOfferModel.updateMany.mock.calls[0];
-  expect(reservationUpdate[0]).toEqual(expect.objectContaining({
-    cooperativeId: cooperative.id,
-    status: 'verified',
-    batchId: null,
-    weighedKg: { $gt: 0 },
-    moisturePercent: { $gt: 0, $lt: 100 },
-  }));
-  expect(reservationUpdate[1].$set).toEqual({
-    batchId: 'BAR-2026-001',
-    batchReservationToken: expect.any(String),
+  expect(mockPrisma.offer.updateMany.mock.calls[0][0]).toEqual({
+    where: {
+      id: { in: [firstOfferId, secondOfferId] },
+      cooperativeId: cooperative.id,
+      status: 'verified',
+      batchId: null,
+      batchReservationToken: null,
+      weighedKg: { gt: 0 },
+      moisturePercent: { gt: 0, lt: 100 },
+    },
+    data: { batchReservationToken: expect.any(String) },
   });
+  const token = mockPrisma.offer.updateMany.mock.calls[0][0].data.batchReservationToken;
+  expect(mockPrisma.offer.updateMany.mock.calls[1][0]).toEqual({
+    where: {
+      id: { in: [firstOfferId, secondOfferId] },
+      batchReservationToken: token,
+      batchId: null,
+    },
+    data: { batchId: 9, batchReservationToken: null },
+  });
+  expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
   expect(res.status).toHaveBeenCalledWith(201);
   expect(next).not.toHaveBeenCalled();
 
-  const chainArgs = JSON.stringify(mockBlockchain.recordBatchOnChain.mock.calls[0][0]);
-  const publicResponse = JSON.stringify(res.json.mock.calls[0][0]);
-  expect(chainArgs).not.toContain(firstOfferId);
-  expect(chainArgs).not.toContain(secondOfferId);
-  expect(chainArgs).not.toMatch(/farmer|user|phone|mpesa|payment|offerIds/i);
-  expect(publicResponse).not.toContain(firstOfferId);
-  expect(publicResponse).not.toContain(secondOfferId);
+  const chainArgs = mockBlockchain.recordBatchOnChain.mock.calls[0][0];
+  const publicPayload = res.json.mock.calls[0][0];
+  expect(chainArgs).not.toHaveProperty('offerIds');
+  expect(JSON.stringify(chainArgs)).not.toMatch(/farmer|user|phone|mpesa|payment|reservation/i);
+  expect(JSON.stringify(publicPayload)).not.toMatch(/offerIds|farmerId|batchReservationToken/i);
 });
 
 test('rounds only the chain gram representation while retaining DB kilograms', async () => {
-  mockOfferModel.find.mockResolvedValue([
+  mockPrisma.offer.findMany.mockResolvedValue([
     offer(firstOfferId, { weighedKg: 1.2344, moisturePercent: 18 }),
     offer(secondOfferId, { weighedKg: 0.0004, moisturePercent: 19 }),
   ]);
@@ -266,42 +286,40 @@ test('rounds only the chain gram representation while retaining DB kilograms', a
 });
 
 test('rolls back only this request reservation when compare-and-set count conflicts', async () => {
-  mockOfferModel.updateMany
-    .mockResolvedValueOnce({ modifiedCount: 1 })
-    .mockResolvedValueOnce({ modifiedCount: 1 });
+  mockPrisma.offer.updateMany
+    .mockResolvedValueOnce({ count: 1 })
+    .mockResolvedValueOnce({ count: 1 });
 
   const { res } = await runCreate();
 
   expect(res.status).toHaveBeenCalledWith(409);
   expect(res.json.mock.calls[0][0].code).toBe('OFFER_RESERVATION_CONFLICT');
-  expect(mockOfferModel.updateMany).toHaveBeenCalledTimes(2);
-  const token = mockOfferModel.updateMany.mock.calls[0][1].$set.batchReservationToken;
-  expect(mockOfferModel.updateMany.mock.calls[1]).toEqual([
-    { batchReservationToken: token },
-    { $set: { batchId: null, batchReservationToken: null } },
-    { runValidators: true },
-  ]);
+  const token = mockPrisma.offer.updateMany.mock.calls[0][0].data.batchReservationToken;
+  expect(mockPrisma.offer.updateMany.mock.calls[1][0]).toEqual({
+    where: { batchReservationToken: token },
+    data: { batchReservationToken: null },
+  });
   expect(mockBlockchain.recordBatchOnChain).not.toHaveBeenCalled();
 });
 
 test('releases reservations when chain submission fails', async () => {
-  mockOfferModel.updateMany
-    .mockResolvedValueOnce({ modifiedCount: 2 })
-    .mockResolvedValueOnce({ modifiedCount: 2 });
+  mockPrisma.offer.updateMany
+    .mockResolvedValueOnce({ count: 2 })
+    .mockResolvedValueOnce({ count: 2 });
   mockBlockchain.recordBatchOnChain.mockRejectedValue(new Error('RPC failure'));
 
   const { res } = await runCreate();
 
   expect(res.status).toHaveBeenCalledWith(502);
-  const token = mockOfferModel.updateMany.mock.calls[0][1].$set.batchReservationToken;
-  expect(mockOfferModel.updateMany.mock.calls[1][0]).toEqual({ batchReservationToken: token });
-  expect(mockOfferModel.updateMany.mock.calls[1][1]).toEqual({
-    $set: { batchId: null, batchReservationToken: null },
+  const token = mockPrisma.offer.updateMany.mock.calls[0][0].data.batchReservationToken;
+  expect(mockPrisma.offer.updateMany.mock.calls[1][0]).toEqual({
+    where: { batchReservationToken: token },
+    data: { batchReservationToken: null },
   });
   expect(mockPrisma.honeyBatch.create).not.toHaveBeenCalled();
 });
 
-test('keeps reservations when PostgreSQL fails after chain confirmation', async () => {
+test('keeps reservations when database finalization fails after chain confirmation', async () => {
   mockPrisma.honeyBatch.create.mockRejectedValue(new Error('database unavailable'));
 
   const { res, next } = await runCreate();
@@ -316,15 +334,24 @@ test('keeps reservations when PostgreSQL fails after chain confirmation', async 
       lotIdsHash: expectedLotIdsHash,
     }),
   }));
-  expect(mockOfferModel.updateMany).toHaveBeenCalledTimes(1);
-  expect(mockOfferModel.updateMany.mock.calls[0][1].$set.batchId).toBe(validBody.batchId);
+  expect(mockPrisma.offer.updateMany).toHaveBeenCalledTimes(1);
   expect(next).not.toHaveBeenCalled();
 });
 
+test('keeps reservations when final compare-and-set count conflicts', async () => {
+  mockPrisma.offer.updateMany
+    .mockResolvedValueOnce({ count: 2 })
+    .mockResolvedValueOnce({ count: 1 });
+
+  const { res } = await runCreate();
+
+  expect(res.status).toHaveBeenCalledWith(500);
+  expect(res.json.mock.calls[0][0].code).toBe('BATCH_RECONCILIATION_REQUIRED');
+  expect(mockPrisma.offer.updateMany).toHaveBeenCalledTimes(2);
+});
+
 test('ADMIN must explicitly select a verified cooperative', async () => {
-  const { res } = await runCreate({
-    user: { id: 1, role: 'ADMIN', cooperativeId: null },
-  });
+  const { res } = await runCreate({ user: { id: 1, role: 'ADMIN', cooperativeId: null } });
 
   expect(res.status).toHaveBeenCalledWith(400);
   expect(res.json.mock.calls[0][0].code).toBe('COOPERATIVE_REQUIRED');
@@ -341,7 +368,7 @@ test('ADMIN resolves the supplied verified cooperative before loading lots', asy
   expect(mockBlockchain.recordBatchOnChain).toHaveBeenCalledTimes(1);
 });
 
-test('GET /batches/:batchId/verify is public and returns only aggregate details plus hash', async () => {
+test('GET /batches/:batchId/verify is public and returns aggregate details plus hash', async () => {
   mockBlockchain.getBatchFromChain.mockResolvedValue({
     batchId: 'BAR-2026-001',
     cooperativeName: 'Baringo Honey Cooperative',
@@ -363,7 +390,6 @@ test('GET /batches/:batchId/verify is public and returns only aggregate details 
       lotIdsHash: expectedLotIdsHash,
     }),
   }));
-  expect(JSON.stringify(response.body)).not.toContain(firstOfferId);
-  expect(JSON.stringify(response.body)).not.toContain(secondOfferId);
+  expect(response.body.data).not.toHaveProperty('offerIds');
   expect(mockBlockchain.getBatchFromChain).toHaveBeenCalledWith('BAR-2026-001');
 });

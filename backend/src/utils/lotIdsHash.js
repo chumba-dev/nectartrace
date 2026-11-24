@@ -1,26 +1,35 @@
 const { ethers } = require('ethers');
 
-// A newline is the canonical separator; Mongo ObjectId hex strings never contain it.
+// Decimal integer IDs are sorted numerically and separated unambiguously by newlines.
 const LOT_ID_DELIMITER = '\n';
-const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/;
+
+function parseLotId(value) {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? value : null;
+  }
+  if (typeof value === 'string' && /^[1-9]\d*$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
 
 function computeLotIdsHash(lotIds) {
   if (!Array.isArray(lotIds) || lotIds.length === 0) {
     throw new TypeError('At least one lot ID is required');
   }
 
-  const canonicalIds = Array.from(lotIds, (value) => (
-    typeof value === 'string' ? value.trim().toLowerCase() : ''
-  ));
-  if (canonicalIds.some((value) => !OBJECT_ID_PATTERN.test(value))) {
-    throw new TypeError('Lot IDs must be 24-character Mongo ObjectId strings');
+  const numericIds = Array.from(lotIds, parseLotId);
+  if (numericIds.some((value) => value === null)) {
+    throw new TypeError('Lot IDs must be positive safe integers');
   }
 
-  canonicalIds.sort();
-  if (canonicalIds.some((value, index) => index > 0 && value === canonicalIds[index - 1])) {
+  numericIds.sort((left, right) => left - right);
+  if (numericIds.some((value, index) => index > 0 && value === numericIds[index - 1])) {
     throw new TypeError('Lot IDs must be unique');
   }
 
+  const canonicalIds = numericIds.map(String);
   return ethers.keccak256(ethers.toUtf8Bytes(canonicalIds.join(LOT_ID_DELIMITER)));
 }
 
