@@ -74,7 +74,7 @@ $env:SEED_ADMIN_PASSWORD = 'replace-with-a-development-password'
 npm run seed
 ```
 
-Production seeding refuses to use development default credentials.
+Production defaults to `SEED_MODE=admin-only` and refuses to use development credentials. Set `SEED_ADMIN_NAME`, `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PHONE`, and `SEED_ADMIN_PASSWORD`, then run `npm run seed`. Use `SEED_MODE=full` only when intentionally creating all documented development roles and the example cooperative.
 
 ## Backend Environment
 

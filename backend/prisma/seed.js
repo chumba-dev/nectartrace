@@ -63,12 +63,25 @@ function readAccount(env, prefix, role) {
 
 function loadSeedConfig(env = process.env) {
   const admin = readAccount(env, 'ADMIN', 'ADMIN');
+  const mode = String(
+    env.SEED_MODE || (env.NODE_ENV === 'production' ? 'admin-only' : 'full')
+  )
+    .trim()
+    .toLowerCase();
+  if (!['admin-only', 'full'].includes(mode)) {
+    throw new Error('SEED_MODE must be admin-only or full');
+  }
+  if (mode === 'admin-only') {
+    return { mode, cooperative: null, accounts: [admin] };
+  }
+
   const commissionPercent = Number(readSeedValue(env, 'SEED_COOPERATIVE_COMMISSION_PERCENT'));
   if (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100) {
     throw new Error('SEED_COOPERATIVE_COMMISSION_PERCENT must be between 0 and 100');
   }
 
   return {
+    mode,
     cooperative: {
       name: readSeedValue(env, 'SEED_COOPERATIVE_NAME'),
       village: readSeedValue(env, 'SEED_COOPERATIVE_VILLAGE'),
@@ -111,28 +124,31 @@ async function upsertSeedUser(prisma, account, cooperativeId, verifiedAt) {
 
 async function seedDatabase(prisma, config) {
   const now = new Date();
-  const existingCooperative = await prisma.cooperative.findUnique({
-    where: { name: config.cooperative.name },
-    select: { id: true, verifiedAt: true },
-  });
-  const cooperative = await prisma.cooperative.upsert({
-    where: { name: config.cooperative.name },
-    create: {
-      ...config.cooperative,
-      isVerified: true,
-      verifiedAt: now,
-    },
-    update: {
-      ...config.cooperative,
-      isVerified: true,
-      verifiedAt: existingCooperative?.verifiedAt || now,
-    },
-    select: { id: true, name: true, isVerified: true },
-  });
+  let cooperative = null;
+  if (config.cooperative) {
+    const existingCooperative = await prisma.cooperative.findUnique({
+      where: { name: config.cooperative.name },
+      select: { id: true, verifiedAt: true },
+    });
+    cooperative = await prisma.cooperative.upsert({
+      where: { name: config.cooperative.name },
+      create: {
+        ...config.cooperative,
+        isVerified: true,
+        verifiedAt: now,
+      },
+      update: {
+        ...config.cooperative,
+        isVerified: true,
+        verifiedAt: existingCooperative?.verifiedAt || now,
+      },
+      select: { id: true, name: true, isVerified: true },
+    });
+  }
 
   const users = [];
   for (const account of config.accounts) {
-    users.push(await upsertSeedUser(prisma, account, cooperative.id, now));
+    users.push(await upsertSeedUser(prisma, account, cooperative?.id || null, now));
   }
 
   return { cooperative, users };
@@ -143,7 +159,11 @@ async function main() {
   const prisma = new PrismaClient();
   try {
     const result = await seedDatabase(prisma, config);
-    console.log(`Seeded ${result.users.length} users and cooperative ${result.cooperative.name}`);
+    console.log(
+      result.cooperative
+        ? `Seeded ${result.users.length} users and cooperative ${result.cooperative.name}`
+        : `Seeded ${result.users.length} administrator account`
+    );
   } finally {
     await prisma.$disconnect();
   }

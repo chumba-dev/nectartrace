@@ -27,3 +27,18 @@ test('production seeding fails when explicit admin credentials are absent', () =
   );
   expect(mockPrismaClient).not.toHaveBeenCalled();
 });
+
+test('production defaults to an admin-only seed when credentials are supplied', () => {
+  const config = loadSeedConfig({
+    NODE_ENV: 'production',
+    SEED_ADMIN_NAME: 'Production Admin',
+    SEED_ADMIN_EMAIL: 'admin@example.com',
+    SEED_ADMIN_PHONE: '+254700000001',
+    SEED_ADMIN_PASSWORD: 'strong-production-password',
+  });
+
+  expect(config.mode).toBe('admin-only');
+  expect(config.cooperative).toBeNull();
+  expect(config.accounts).toHaveLength(1);
+  expect(config.accounts[0].role).toBe('ADMIN');
+});
