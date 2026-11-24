@@ -371,11 +371,9 @@ async function recordHarvest(runtime, weightKg, phoneNumber, sessionId) {
   const total = Number(totalResult?._sum?.weightKg) || 0;
 
   if (created) {
-    try {
-      await smsService.sendHarvestConfirmation(phoneNumber, weightKg, total);
-    } catch (err) {
+    void smsService.sendHarvestConfirmation(phoneNumber, weightKg, total).catch(() => {
       logger.warn('Harvest confirmation SMS failed');
-    }
+    });
   }
   finish(runtime, menu.harvestConfirmation(compactNumber(weightKg), compactNumber(total)));
 }
@@ -603,15 +601,15 @@ async function confirmOffer(runtime, phoneNumber, sessionId) {
     return;
   }
   if (result.created) {
-    try {
-      await smsService.sendHarvestOfferConfirmation(
+    void smsService
+      .sendHarvestOfferConfirmation(
         phoneNumber,
         result.offer.reference,
         result.cooperativeName
-      );
-    } catch (err) {
-      logger.warn('Offer submission SMS failed');
-    }
+      )
+      .catch(() => {
+        logger.warn('Offer submission SMS failed');
+      });
   }
   finish(runtime, menu.offerSubmitted(result.offer.reference, result.cooperativeName));
 }

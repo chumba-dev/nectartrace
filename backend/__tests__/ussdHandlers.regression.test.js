@@ -469,6 +469,35 @@ test('harvest final write and SMS are replay safe', async () => {
   expect(mockSmsService.sendHarvestConfirmation).toHaveBeenCalledTimes(1);
 });
 
+test('harvest response does not wait for slow SMS delivery', async () => {
+  addUser();
+  mockPrisma.harvestLog.aggregate.mockResolvedValue({ _sum: { weightKg: 8 } });
+  let releaseSms;
+  mockSmsService.sendHarvestConfirmation.mockReturnValue(
+    new Promise((resolve) => {
+      releaseSms = resolve;
+    })
+  );
+
+  const sessionId = 'harvest-slow-sms';
+  await event(sessionId, '');
+  await event(sessionId, '1');
+
+  let timer;
+  try {
+    const response = await Promise.race([
+      event(sessionId, '1*8'),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('USSD waited for SMS')), 500);
+      }),
+    ]);
+    expect(response).toContain('END Harvest 8kg recorded.');
+  } finally {
+    clearTimeout(timer);
+    releaseSms({});
+  }
+});
+
 test('My Offers is newest-first, farmer-scoped, and paginated four at a time', async () => {
   addUser();
   offers = [
