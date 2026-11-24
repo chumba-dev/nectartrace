@@ -1,10 +1,20 @@
 const mockPrisma = {
   $transaction: jest.fn(),
+  order: { findMany: jest.fn() },
 };
+const mockNotifyCooperativeLeaders = jest.fn();
 
 jest.mock('../src/config/db', () => mockPrisma);
+jest.mock('../src/services/notificationService', () => ({
+  notifyCooperativeLeaders: mockNotifyCooperativeLeaders,
+}));
 
-const { createOrder, updateOrderStatus } = require('../src/controllers/orderController');
+const {
+  createOrder,
+  listAdminOrders,
+  listOrders,
+  updateOrderStatus,
+} = require('../src/controllers/orderController');
 
 function createResponse() {
   const res = {};
@@ -15,6 +25,7 @@ function createResponse() {
 
 beforeEach(() => {
   jest.resetAllMocks();
+  mockPrisma.order.findMany.mockResolvedValue([]);
 });
 
 test.each([0, -1, '0', '-2.5'])(
@@ -46,12 +57,14 @@ test('order creation reserves inventory atomically before creating the order', a
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findUnique: jest.fn().mockResolvedValue({
         id: 4,
+        cooperativeId: 12,
         quantityKg: 0,
         pricePerKg: 600,
         isAvailable: true,
       }),
       update: jest.fn().mockResolvedValue({
         id: 4,
+        cooperativeId: 12,
         quantityKg: 0,
         pricePerKg: 600,
         isAvailable: false,
@@ -90,6 +103,13 @@ test('order creation reserves inventory atomically before creating the order', a
     },
     include: { listing: true },
   });
+  expect(mockNotifyCooperativeLeaders).toHaveBeenCalledWith(expect.objectContaining({
+    client: tx,
+    cooperativeId: 12,
+    type: 'ORDER_CREATED',
+    entityType: 'Order',
+    entityId: 31,
+  }));
   expect(res.status).toHaveBeenCalledWith(201);
   expect(res.json).toHaveBeenCalledWith({ success: true, data: order });
   expect(next).not.toHaveBeenCalled();
@@ -118,6 +138,7 @@ test('cancelling an order restores inventory in the status transaction', async (
     params: { id: '31' },
     body: { status: 'CANCELLED' },
     user: { id: 5, role: 'COOPERATIVE_STAFF', cooperativeId: 12 },
+    cooperativeMembership: { cooperativeId: 12, role: 'STAFF', isActive: true },
   };
   const res = createResponse();
   const next = jest.fn();
@@ -139,4 +160,50 @@ test('cancelling an order restores inventory in the status transaction', async (
   });
   expect(res.json).toHaveBeenCalledWith({ success: true, data: cancelledOrder });
   expect(next).not.toHaveBeenCalled();
+});
+
+test('an administrator cannot update order status', async () => {
+  const req = {
+    params: { id: '31' },
+    body: { status: 'CONFIRMED' },
+    user: { id: 1, role: 'ADMIN' },
+  };
+  const res = createResponse();
+
+  await updateOrderStatus(req, res, jest.fn());
+
+  expect(res.status).toHaveBeenCalledWith(403);
+  expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+});
+
+test('cooperative members read only their cooperative orders while ADMIN reads all', async () => {
+  const memberRes = createResponse();
+  await listOrders({
+    user: { id: 5, role: 'COOPERATIVE_STAFF' },
+    cooperativeMembership: { cooperativeId: 12, role: 'STAFF', isActive: true },
+  }, memberRes, jest.fn());
+  expect(mockPrisma.order.findMany.mock.calls[0][0].where).toEqual({
+    listing: { cooperativeId: 12 },
+  });
+
+  const adminRes = createResponse();
+  await listOrders({ user: { id: 1, role: 'ADMIN' } }, adminRes, jest.fn());
+  expect(mockPrisma.order.findMany.mock.calls[1][0].where).toEqual({});
+});
+
+test('admin order listing supports cooperative and status filters read-only', async () => {
+  const res = createResponse();
+
+  await listAdminOrders({
+    query: { cooperativeId: '12', status: 'PENDING' },
+    user: { id: 1, role: 'ADMIN' },
+  }, res, jest.fn());
+
+  expect(mockPrisma.order.findMany).toHaveBeenCalledWith(expect.objectContaining({
+    where: {
+      listing: { cooperativeId: 12 },
+      status: 'PENDING',
+    },
+  }));
+  expect(res.json).toHaveBeenCalledWith({ success: true, data: [] });
 });

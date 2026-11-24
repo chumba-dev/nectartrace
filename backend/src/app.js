@@ -14,6 +14,9 @@ const orderRoutes = require('./routes/orders');
 const priceRoutes = require('./routes/prices');
 const harvestOfferRoutes = require('./routes/harvestOffers');
 const paymentRoutes = require('./routes/payments');
+const cooperativeApplicationRoutes = require('./routes/cooperativeApplications');
+const cooperativeMemberRoutes = require('./routes/cooperativeMembers');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 
@@ -92,6 +95,9 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/offers', harvestOfferRoutes);
 app.use('/api/harvest-offers', harvestOfferRoutes);
+app.use('/api/cooperative-applications', cooperativeApplicationRoutes);
+app.use('/api/cooperative/members', cooperativeMemberRoutes);
+app.use('/api/notifications', notificationRoutes);
 // ============================================
 // ERROR HANDLING
 // ============================================

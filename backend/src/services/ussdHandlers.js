@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 const menu = require('./ussdMenu');
 const sessionService = require('./ussdSessionService');
 const smsService = require('./smsService');
+const notificationService = require('./notificationService');
 const { BARINGO_WARDS, USSD_PAGE_SIZE } = require('../config/baringoAreas');
 const {
   normalizePhone,
@@ -556,21 +557,33 @@ async function createOffer(runtime, sessionId) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const offeredAt = new Date();
     try {
-      const created = await prisma.offer.create({
-        data: {
-          farmerId: runtime.farmer.id,
-          cooperativeId: cooperative.id,
-          ward: cooperative.ward,
-          offeredKg: runtime.context.offer.offeredKg,
-          expectedPricePerKg: runtime.context.offer.expectedPricePerKg,
-          tradeType: runtime.context.offer.tradeType,
-          commissionPercent,
-          status: 'offered',
-          offeredAt,
-          expiresAt: new Date(offeredAt.getTime() + OFFER_LIFETIME_MS),
-          ussdSessionId: sessionId,
-          reference: makeOfferReference(),
-        },
+      const created = await prisma.$transaction(async (tx) => {
+        const offer = await tx.offer.create({
+          data: {
+            farmerId: runtime.farmer.id,
+            cooperativeId: cooperative.id,
+            ward: cooperative.ward,
+            offeredKg: runtime.context.offer.offeredKg,
+            expectedPricePerKg: runtime.context.offer.expectedPricePerKg,
+            tradeType: runtime.context.offer.tradeType,
+            commissionPercent,
+            status: 'offered',
+            offeredAt,
+            expiresAt: new Date(offeredAt.getTime() + OFFER_LIFETIME_MS),
+            ussdSessionId: sessionId,
+            reference: makeOfferReference(),
+          },
+        });
+        await notificationService.notifyCooperativeLeaders({
+          client: tx,
+          cooperativeId: offer.cooperativeId,
+          type: 'HARVEST_OFFER_SUBMITTED',
+          title: 'New harvest offer',
+          message: `Harvest offer ${offer.reference} was submitted for review.`,
+          entityType: 'Offer',
+          entityId: offer.id,
+        });
+        return offer;
       });
       return {
         offer: created,

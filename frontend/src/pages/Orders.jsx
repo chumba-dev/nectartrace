@@ -21,7 +21,11 @@ export default function Orders() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const isBuyer = user.role === 'BUYER';
-  const canManageOrders = ['COOPERATIVE_STAFF', 'ADMIN'].includes(user.role);
+  const isAdmin = user.role === 'ADMIN';
+  const canManageOrders =
+    user.role === 'COOPERATIVE_STAFF' &&
+    user.isActive !== false &&
+    user.cooperativeMembership?.isActive === true;
 
   useEffect(() => {
     document.title = 'Orders — NectarTrace';
@@ -65,12 +69,20 @@ export default function Orders() {
           Orders
         </p>
         <h1 className="text-display-lg font-display text-ivory mb-4">
-          {isBuyer ? 'Your purchases' : 'Cooperative orders'}
+          {isBuyer
+            ? 'Your purchases'
+            : isAdmin
+              ? 'Platform order record'
+              : 'Cooperative orders'}
         </h1>
         <p className="text-dust">
           {isBuyer
             ? 'Track your purchases and their delivery status.'
-            : 'Review orders placed against cooperative listings.'}
+            : isAdmin
+              ? 'Read-only order access. Use Admin oversight for filters and cooperative grouping.'
+              : canManageOrders
+                ? 'Review and manage orders placed against your cooperative listings.'
+                : 'Review orders placed against your cooperative listings.'}
         </p>
       </div>
 

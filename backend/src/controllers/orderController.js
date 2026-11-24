@@ -1,4 +1,5 @@
 const prisma = require('../config/db');
+const notificationService = require('../services/notificationService');
 
 const ORDER_STATUSES = ['PENDING', 'CONFIRMED', 'DELIVERED', 'CANCELLED'];
 const ORDER_STATUS_TRANSITIONS = {
@@ -20,11 +21,14 @@ function parsePositiveNumber(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function getOrderScope(user) {
-  if (user.role === 'ADMIN') return {};
-  if (user.role === 'BUYER') return { buyerId: user.id };
-  if (user.role === 'COOPERATIVE_STAFF' && user.cooperativeId) {
-    return { listing: { cooperativeId: user.cooperativeId } };
+function getOrderScope(req) {
+  if (req.user.role === 'ADMIN') return {};
+  if (req.user.role === 'BUYER') return { buyerId: req.user.id };
+  if (
+    req.user.role === 'COOPERATIVE_STAFF'
+    && req.cooperativeMembership?.isActive
+  ) {
+    return { listing: { cooperativeId: req.cooperativeMembership.cooperativeId } };
   }
   return null;
 }
@@ -89,6 +93,16 @@ async function createOrder(req, res, next) {
         include: { listing: true },
       });
 
+      await notificationService.notifyCooperativeLeaders({
+        client: tx,
+        cooperativeId: listing.cooperativeId,
+        type: 'ORDER_CREATED',
+        title: 'New marketplace order',
+        message: `Order #${order.id} was placed for ${parsedQuantityKg} kg of honey.`,
+        entityType: 'Order',
+        entityId: order.id,
+      });
+
       return { order };
     });
 
@@ -102,7 +116,7 @@ async function createOrder(req, res, next) {
 
 async function listOrders(req, res, next) {
   try {
-    const where = getOrderScope(req.user);
+    const where = getOrderScope(req);
     if (!where) {
       return res.status(403).json({ success: false, message: 'You are not allowed to view orders' });
     }
@@ -126,14 +140,17 @@ async function getOrder(req, res, next) {
       return res.status(400).json({ success: false, message: 'Order id must be a positive integer' });
     }
 
-    const scope = getOrderScope(req.user);
+    const scope = getOrderScope(req);
     if (!scope) {
       return res.status(403).json({ success: false, message: 'You are not allowed to view orders' });
     }
 
     const order = await prisma.order.findFirst({
       where: { id, ...scope },
-      include: { listing: true, buyer: { select: { id: true, name: true, phone: true } } },
+      include: {
+        listing: { include: { batch: true, cooperative: true } },
+        buyer: { select: { id: true, name: true, phone: true } },
+      },
     });
     if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
     res.json({ success: true, data: order });
@@ -150,6 +167,15 @@ async function updateOrderStatus(req, res, next) {
     if (!ORDER_STATUSES.includes(status)) {
       return res.status(400).json({ success: false, message: 'Invalid status' });
     }
+    if (
+      req.user.role !== 'COOPERATIVE_STAFF'
+      || !req.cooperativeMembership?.isActive
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: 'An active cooperative membership is required to update orders',
+      });
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`;
@@ -160,12 +186,7 @@ async function updateOrderStatus(req, res, next) {
       });
       if (!order) return { error: { status: 404, message: 'Order not found' } };
 
-      if (
-        req.user.role !== 'ADMIN'
-        && (req.user.role !== 'COOPERATIVE_STAFF'
-          || !req.user.cooperativeId
-          || order.listing.cooperativeId !== req.user.cooperativeId)
-      ) {
+      if (order.listing.cooperativeId !== req.cooperativeMembership.cooperativeId) {
         return { error: { status: 403, message: 'You cannot update this order' } };
       }
 
@@ -202,4 +223,51 @@ async function updateOrderStatus(req, res, next) {
   } catch (err) { next(err); }
 }
 
-module.exports = { createOrder, listOrders, getOrder, updateOrderStatus };
+async function listAdminOrders(req, res, next) {
+  try {
+    const where = {};
+    if (req.query.cooperativeId !== undefined) {
+      const cooperativeId = parsePositiveInteger(req.query.cooperativeId);
+      if (!cooperativeId) {
+        return res.status(400).json({
+          success: false,
+          message: 'cooperativeId must be a positive integer',
+        });
+      }
+      where.listing = { cooperativeId };
+    }
+    if (req.query.status !== undefined) {
+      if (!ORDER_STATUSES.includes(req.query.status)) {
+        return res.status(400).json({ success: false, message: 'Invalid status' });
+      }
+      where.status = req.query.status;
+    }
+
+    const orders = await prisma.order.findMany({
+      where,
+      include: {
+        listing: {
+          include: {
+            batch: true,
+            cooperative: true,
+          },
+        },
+        buyer: {
+          select: { id: true, name: true, phone: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return res.json({ success: true, data: orders });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = {
+  createOrder,
+  getOrder,
+  listAdminOrders,
+  listOrders,
+  updateOrderStatus,
+};

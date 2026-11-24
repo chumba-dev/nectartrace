@@ -7,9 +7,10 @@ const {
   initiateOfferPayout,
 } = require('../controllers/paymentController');
 const {
+  attachActiveMembershipForCooperativeStaff,
   authenticate,
   authorize,
-  requireVerifiedCooperative,
+  requireActiveCooperativeMembership,
 } = require('../middleware/auth');
 
 const router = express.Router();
@@ -26,12 +27,13 @@ router.post(
 router.get(
   '/offers/:offerId',
   authorize('FARMER', 'COOPERATIVE_STAFF', 'ADMIN'),
+  attachActiveMembershipForCooperativeStaff,
   getOfferPayment
 );
 router.post(
   '/offers/:offerId/payout',
-  authorize('COOPERATIVE_STAFF', 'ADMIN'),
-  requireVerifiedCooperative,
+  authorize('COOPERATIVE_STAFF'),
+  requireActiveCooperativeMembership,
   initiateOfferPayout
 );
 

@@ -1,4 +1,5 @@
 const mockPrisma = {
+  $transaction: jest.fn(),
   ussdSession: {
     upsert: jest.fn(),
     updateMany: jest.fn(),
@@ -34,6 +35,7 @@ const mockSmsService = {
   sendHarvestConfirmation: jest.fn(),
   sendHarvestOfferConfirmation: jest.fn(),
 };
+const mockNotifyCooperativeLeaders = jest.fn();
 
 const mockLogger = {
   info: jest.fn(),
@@ -48,6 +50,9 @@ const mockBcrypt = {
 
 jest.mock('../src/config/db', () => mockPrisma);
 jest.mock('../src/services/smsService', () => mockSmsService);
+jest.mock('../src/services/notificationService', () => ({
+  notifyCooperativeLeaders: mockNotifyCooperativeLeaders,
+}));
 jest.mock('../src/utils/logger', () => mockLogger);
 jest.mock('bcryptjs', () => mockBcrypt);
 
@@ -137,6 +142,8 @@ beforeEach(() => {
   sessionClock = 0;
   nextUserId = 100;
   nextOfferId = 1;
+
+  mockPrisma.$transaction.mockImplementation(async (operation) => operation(mockPrisma));
 
   mockPrisma.ussdSession.upsert.mockImplementation(async ({ where, create }) => {
     let session = sessions.get(where.id);
@@ -444,6 +451,14 @@ test('offer confirmation uses Prisma, snapshots current commission, and identica
     reference: expect.stringMatching(/^NTO-\d{8}-[A-F0-9]{8}$/),
   }));
   expect(created.expiresAt.getTime() - created.offeredAt.getTime()).toBe(48 * 60 * 60 * 1000);
+  expect(mockNotifyCooperativeLeaders).toHaveBeenCalledTimes(1);
+  expect(mockNotifyCooperativeLeaders).toHaveBeenCalledWith(expect.objectContaining({
+    client: mockPrisma,
+    cooperativeId: 14,
+    type: 'HARVEST_OFFER_SUBMITTED',
+    entityType: 'Offer',
+    entityId: 1,
+  }));
   expect(mockSmsService.sendHarvestOfferConfirmation).toHaveBeenCalledTimes(1);
 });
 

@@ -79,6 +79,53 @@ export const authApi = {
   updateMe: (data) => api.put('/auth/me', data),
 };
 
+export const adminApplicationsApi = {
+  list: (params) => api.get('/admin/cooperative-applications', { params }),
+  approve: (id) => api.put(`/admin/cooperative-applications/${id}/approve`),
+  reject: (id, reason) =>
+    api.put(`/admin/cooperative-applications/${id}/reject`, { reason }),
+};
+
+export const adminUsersApi = {
+  list: (params) => api.get('/admin/users', { params }),
+  updateActive: (id, isActive) =>
+    api.put(`/admin/users/${id}/active`, { isActive }),
+};
+
+export const adminOrdersApi = {
+  list: (params) => api.get('/admin/orders', { params }),
+};
+
+export const adminCooperativesApi = {
+  create: (data) => api.post('/admin/cooperatives', data),
+  verify: (id) => api.put(`/admin/cooperatives/${id}/verify`),
+};
+
+export const adminStatsApi = {
+  get: () => api.get('/admin/stats'),
+};
+
+export const cooperativeApplicationsApi = {
+  create: (data) => api.post('/cooperative-applications', data),
+  mine: () => api.get('/cooperative-applications/mine'),
+};
+
+export const cooperativeMembersApi = {
+  list: () => api.get('/cooperative/members'),
+  add: (data) => api.post('/cooperative/members', data),
+  updateRole: (userId, role) =>
+    api.put(`/cooperative/members/${userId}/role`, { role }),
+  updateActive: (userId, isActive) =>
+    api.put(`/cooperative/members/${userId}/active`, { isActive }),
+};
+
+export const notificationsApi = {
+  list: (params) => api.get('/notifications', { params }),
+  unreadCount: () => api.get('/notifications/unread-count'),
+  markRead: (id) => api.put(`/notifications/${id}/read`),
+  markAllRead: () => api.put('/notifications/read-all'),
+};
+
 export const batchesApi = {
   list: (params) => api.get('/batches', { params }),
   get: (batchId) => api.get(`/batches/${batchId}`),

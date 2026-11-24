@@ -74,6 +74,26 @@ enum PaymentStatus {
   timeout
 }
 
+enum CooperativeApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum CooperativeMemberRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
+enum NotificationType {
+  COOPERATIVE_APPLICATION_SUBMITTED
+  COOPERATIVE_APPLICATION_APPROVED
+  COOPERATIVE_APPLICATION_REJECTED
+  HARVEST_OFFER_SUBMITTED
+  ORDER_CREATED
+}
+
 // ============================================
 // MODELS
 // ============================================
@@ -99,6 +119,8 @@ model Cooperative {
   offers            Offer[]
   payments          Payment[]
   farmerSettlements FarmerSettlement[]
+  memberships       CooperativeMembership[]
+  applications      CooperativeApplication[]
 }
 
 model User {
@@ -121,15 +143,99 @@ model User {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  cooperative            Cooperative?            @relation(fields: [cooperativeId], references: [id])
-  orders                 Order[]                 @relation("BuyerOrders")
+  cooperative            Cooperative?             @relation(fields: [cooperativeId], references: [id])
+  orders                 Order[]                  @relation("BuyerOrders")
   harvestLogs            HarvestLog[]
-  offers                 Offer[]                 @relation("FarmerOffers")
-  payments               Payment[]               @relation("FarmerPayments")
-  farmerSettlements      FarmerSettlement[]      @relation("FarmerSettlements")
+  offers                 Offer[]                  @relation("FarmerOffers")
+  payments               Payment[]                @relation("FarmerPayments")
+  farmerSettlements      FarmerSettlement[]       @relation("FarmerSettlements")
   emailVerificationToken EmailVerificationToken?
+  cooperativeMembership  CooperativeMembership?   @relation("CooperativeMembershipUser")
+  invitedMemberships     CooperativeMembership[]  @relation("CooperativeMembershipInviter")
+  submittedApplications  CooperativeApplication[] @relation("CooperativeApplicationApplicant")
+  reviewedApplications   CooperativeApplication[] @relation("CooperativeApplicationReviewer")
+  notificationRecipients NotificationRecipient[]
 
   @@index([cooperativeId])
+}
+
+model CooperativeApplication {
+  id                 Int                          @id @default(autoincrement())
+  applicantId        Int
+  name               String
+  village            String
+  ward               String
+  county             String                       @default("Baringo")
+  walletAddress      String
+  registrationNumber String
+  phone              String
+  commissionPercent  Float                        @default(0)
+  status             CooperativeApplicationStatus @default(PENDING)
+  rejectionReason    String?
+  reviewedById       Int?
+  reviewedAt         DateTime?
+  cooperativeId      Int?
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  applicant   User         @relation("CooperativeApplicationApplicant", fields: [applicantId], references: [id])
+  reviewedBy  User?        @relation("CooperativeApplicationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  cooperative Cooperative? @relation(fields: [cooperativeId], references: [id], onDelete: SetNull)
+
+  @@index([applicantId, status])
+  @@index([status, createdAt])
+  @@index([reviewedById])
+  @@index([cooperativeId])
+}
+
+model CooperativeMembership {
+  id              Int                   @id @default(autoincrement())
+  cooperativeId   Int
+  userId          Int                   @unique
+  role            CooperativeMemberRole @default(STAFF)
+  isActive        Boolean               @default(true)
+  invitedByUserId Int?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  cooperative   Cooperative @relation(fields: [cooperativeId], references: [id])
+  user          User        @relation("CooperativeMembershipUser", fields: [userId], references: [id])
+  invitedByUser User?       @relation("CooperativeMembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([cooperativeId, userId])
+  @@index([cooperativeId, isActive, role])
+  @@index([invitedByUserId])
+}
+
+model Notification {
+  id         Int              @id @default(autoincrement())
+  type       NotificationType
+  title      String
+  message    String
+  entityType String?
+  entityId   String?
+  createdAt  DateTime         @default(now())
+
+  recipients NotificationRecipient[]
+
+  @@unique([type, entityType, entityId])
+  @@index([createdAt])
+  @@index([entityType, entityId])
+}
+
+model NotificationRecipient {
+  id             Int       @id @default(autoincrement())
+  notificationId Int
+  userId         Int
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt, createdAt])
+  @@index([notificationId])
 }
 
 model HoneyBatch {

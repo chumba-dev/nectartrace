@@ -41,6 +41,7 @@ test.each([
   const req = {
     body: { ...validListing, ...override },
     user: { id: 2, role: 'COOPERATIVE_STAFF', cooperativeId: 4 },
+    cooperativeMembership: { cooperativeId: 4, role: 'OWNER', isActive: true },
   };
   const res = createResponse();
   const next = jest.fn();
@@ -77,6 +78,7 @@ test('batch capacity excludes cancelled orders when creating a listing', async (
   const req = {
     body: validListing,
     user: { id: 2, role: 'COOPERATIVE_STAFF', cooperativeId: 4 },
+    cooperativeMembership: { cooperativeId: 4, role: 'OWNER', isActive: true },
   };
   const res = createResponse();
   const next = jest.fn();
@@ -104,6 +106,7 @@ test.each([
   const req = {
     body: { ...validListing, ...override },
     user: { id: 2, role: 'COOPERATIVE_STAFF', cooperativeId: 4 },
+    cooperativeMembership: { cooperativeId: 4, role: 'OWNER', isActive: true },
   };
   const res = createResponse();
   const next = jest.fn();

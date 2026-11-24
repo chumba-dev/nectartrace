@@ -41,42 +41,28 @@ async function releaseReservation(batchReservationToken, expectedCount) {
 }
 
 async function resolveBatchCooperative(req) {
-  let cooperativeId;
+  const cooperativeId = req.cooperativeMembership?.cooperativeId;
   const requestedCooperativeId = req.body.cooperativeId === undefined
     ? null
     : parsePositiveInteger(req.body.cooperativeId);
 
-  if (req.user.role === 'ADMIN') {
-    if (!requestedCooperativeId) {
-      return {
-        error: {
-          status: 400,
-          message: 'ADMIN batch creation requires a positive cooperativeId',
-          code: 'COOPERATIVE_REQUIRED',
-        },
-      };
-    }
-    cooperativeId = requestedCooperativeId;
-  } else {
-    if (!req.user.cooperativeId) {
-      return {
-        error: {
-          status: 403,
-          message: 'Your account is not linked to a cooperative. Ask your admin to assign you.',
-          code: 'NO_COOPERATIVE',
-        },
-      };
-    }
-    if (req.body.cooperativeId !== undefined && requestedCooperativeId !== req.user.cooperativeId) {
-      return {
-        error: {
-          status: 403,
-          message: 'You can only create batches for your cooperative',
-          code: 'COOPERATIVE_SCOPE_DENIED',
-        },
-      };
-    }
-    cooperativeId = req.user.cooperativeId;
+  if (!cooperativeId) {
+    return {
+      error: {
+        status: 403,
+        message: 'An active cooperative membership is required',
+        code: 'NO_COOPERATIVE',
+      },
+    };
+  }
+  if (req.body.cooperativeId !== undefined && requestedCooperativeId !== cooperativeId) {
+    return {
+      error: {
+        status: 403,
+        message: 'You can only create batches for your cooperative',
+        code: 'COOPERATIVE_SCOPE_DENIED',
+      },
+    };
   }
 
   const cooperative = await prisma.cooperative.findUnique({
@@ -454,12 +440,8 @@ async function verifyBatch(req, res, next) {
 // GET /api/batches/my
 async function getMyBatches(req, res, next) {
   try {
-    if (!req.user.cooperativeId) {
-      return res.json({ success: true, data: [], count: 0 });
-    }
-
     const batches = await prisma.honeyBatch.findMany({
-      where: { cooperativeId: req.user.cooperativeId },
+      where: { cooperativeId: req.cooperativeMembership.cooperativeId },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -491,7 +473,7 @@ async function updateStatus(req, res, next) {
       return res.status(404).json({ success: false, message: 'Batch not found' });
     }
 
-    if (batch.cooperativeId !== req.user.cooperativeId) {
+    if (batch.cooperativeId !== req.cooperativeMembership.cooperativeId) {
       return res.status(403).json({
         success: false,
         message: 'You can only update your cooperative\'s batches',

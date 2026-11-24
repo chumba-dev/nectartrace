@@ -93,9 +93,9 @@ function validateImageUrl(value) {
   return { value: trimmed };
 }
 
-function canManageCooperative(user, cooperativeId) {
-  return user.role === 'ADMIN'
-    || (Boolean(user.cooperativeId) && user.cooperativeId === cooperativeId);
+function canManageCooperative(req, cooperativeId) {
+  return Boolean(req.cooperativeMembership?.isActive)
+    && req.cooperativeMembership.cooperativeId === cooperativeId;
 }
 
 async function getAllocatedBatchQuantity(client, batchId, excludedListingId) {
@@ -211,7 +211,7 @@ async function createListing(req, res, next) {
       await tx.$queryRaw`SELECT "id" FROM "HoneyBatch" WHERE "id" = ${parsedBatchId} FOR UPDATE`;
       const batch = await tx.honeyBatch.findUnique({ where: { id: parsedBatchId } });
       if (!batch) return { error: { status: 404, message: 'Batch not found' } };
-      if (!canManageCooperative(req.user, batch.cooperativeId)) {
+      if (!canManageCooperative(req, batch.cooperativeId)) {
         return { error: { status: 403, message: 'You can only list honey from your cooperative' } };
       }
       if (batch.status !== 'AVAILABLE') {
@@ -314,7 +314,7 @@ async function updateListing(req, res, next) {
         include: { batch: true },
       });
       if (!listing) return { error: { status: 404, message: 'Listing not found' } };
-      if (!canManageCooperative(req.user, listing.cooperativeId)) {
+      if (!canManageCooperative(req, listing.cooperativeId)) {
         return { error: { status: 403, message: 'You cannot update this listing' } };
       }
       if (listing.batch.status !== 'AVAILABLE') {

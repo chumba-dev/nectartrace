@@ -64,6 +64,11 @@ function authorize(...roles) {
 }
 
 async function requireVerifiedCooperative(req, res, next) {
+  if (req.user?.role === 'ADMIN') return next();
+  return requireActiveCooperativeMembership(req, res, next);
+}
+
+async function requireActiveCooperativeMembership(req, res, next) {
   try {
     if (!req.user) {
       return res.status(401).json({
@@ -72,12 +77,9 @@ async function requireVerifiedCooperative(req, res, next) {
       });
     }
 
-    if (req.user.role === 'ADMIN') return next();
-
     if (
       req.user.role !== 'COOPERATIVE_STAFF'
       || req.user.isActive === false
-      || !req.user.cooperativeId
     ) {
       return res.status(403).json({
         success: false,
@@ -86,11 +88,20 @@ async function requireVerifiedCooperative(req, res, next) {
       });
     }
 
-    const cooperative = await prisma.cooperative.findUnique({
-      where: { id: req.user.cooperativeId },
-      select: { id: true, isVerified: true },
+    const membership = await prisma.cooperativeMembership.findUnique({
+      where: { userId: req.user.id },
+      select: {
+        id: true,
+        cooperativeId: true,
+        userId: true,
+        role: true,
+        isActive: true,
+        cooperative: {
+          select: { id: true, name: true, isVerified: true },
+        },
+      },
     });
-    if (!cooperative?.isVerified) {
+    if (!membership?.isActive || !membership.cooperative?.isVerified) {
       return res.status(403).json({
         success: false,
         message: 'A verified cooperative assignment is required',
@@ -98,10 +109,24 @@ async function requireVerifiedCooperative(req, res, next) {
       });
     }
 
+    req.cooperativeMembership = membership;
+    req.cooperative = membership.cooperative;
+    req.user.cooperativeId = membership.cooperativeId;
     return next();
   } catch (err) {
     return next(err);
   }
 }
 
-module.exports = { authenticate, authorize, requireVerifiedCooperative };
+async function attachActiveMembershipForCooperativeStaff(req, res, next) {
+  if (req.user?.role !== 'COOPERATIVE_STAFF') return next();
+  return requireActiveCooperativeMembership(req, res, next);
+}
+
+module.exports = {
+  attachActiveMembershipForCooperativeStaff,
+  authenticate,
+  authorize,
+  requireActiveCooperativeMembership,
+  requireVerifiedCooperative,
+};

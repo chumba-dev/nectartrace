@@ -98,6 +98,15 @@ export function AuthProvider({ children }) {
     return res.data.data;
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    if (!token) return null;
+    const res = await authApi.me();
+    const userData = res.data.data;
+    setUser(userData);
+    localStorage.setItem('nectartrace_user', JSON.stringify(userData));
+    return userData;
+  }, [token]);
+
   const googleLogin = useCallback(
     async (data) => {
       const res = await authApi.google(data);
@@ -121,6 +130,7 @@ export function AuthProvider({ children }) {
     login,
     register,
     googleLogin,
+    refreshUser,
     logout,
   };
 

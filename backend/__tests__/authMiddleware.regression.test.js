@@ -1,6 +1,6 @@
 const mockPrisma = {
   user: { findUnique: jest.fn() },
-  cooperative: { findUnique: jest.fn() },
+  cooperativeMembership: { findUnique: jest.fn() },
 };
 const mockVerifyToken = jest.fn();
 
@@ -49,7 +49,7 @@ test('ADMIN bypasses cooperative verification for controller-level checks', asyn
   await requireVerifiedCooperative(req, createResponse(), next);
 
   expect(next).toHaveBeenCalledTimes(1);
-  expect(mockPrisma.cooperative.findUnique).not.toHaveBeenCalled();
+  expect(mockPrisma.cooperativeMembership.findUnique).not.toHaveBeenCalled();
 });
 
 test.each([
@@ -68,12 +68,25 @@ test.each([
     message: 'A verified cooperative assignment is required',
     code: 'COOPERATIVE_NOT_VERIFIED',
   });
-  expect(mockPrisma.cooperative.findUnique).not.toHaveBeenCalled();
+  if (state.isActive === false) {
+    expect(mockPrisma.cooperativeMembership.findUnique).not.toHaveBeenCalled();
+  } else {
+    expect(mockPrisma.cooperativeMembership.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: 4 },
+    }));
+  }
   expect(next).not.toHaveBeenCalled();
 });
 
 test('rejects staff assigned to an unverified cooperative', async () => {
-  mockPrisma.cooperative.findUnique.mockResolvedValue({ id: 2, isVerified: false });
+  mockPrisma.cooperativeMembership.findUnique.mockResolvedValue({
+    id: 8,
+    cooperativeId: 2,
+    userId: 4,
+    role: 'STAFF',
+    isActive: true,
+    cooperative: { id: 2, name: 'Coop', isVerified: false },
+  });
   const req = {
     user: { id: 4, role: 'COOPERATIVE_STAFF', cooperativeId: 2, isActive: true },
   };
@@ -82,17 +95,23 @@ test('rejects staff assigned to an unverified cooperative', async () => {
 
   await requireVerifiedCooperative(req, res, next);
 
-  expect(mockPrisma.cooperative.findUnique).toHaveBeenCalledWith({
-    where: { id: 2 },
-    select: { id: true, isVerified: true },
-  });
+  expect(mockPrisma.cooperativeMembership.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+    where: { userId: 4 },
+  }));
   expect(res.status).toHaveBeenCalledWith(403);
   expect(res.json.mock.calls[0][0].code).toBe('COOPERATIVE_NOT_VERIFIED');
   expect(next).not.toHaveBeenCalled();
 });
 
 test('allows active staff assigned to a verified cooperative', async () => {
-  mockPrisma.cooperative.findUnique.mockResolvedValue({ id: 2, isVerified: true });
+  mockPrisma.cooperativeMembership.findUnique.mockResolvedValue({
+    id: 8,
+    cooperativeId: 2,
+    userId: 4,
+    role: 'STAFF',
+    isActive: true,
+    cooperative: { id: 2, name: 'Coop', isVerified: true },
+  });
   const req = {
     user: { id: 4, role: 'COOPERATIVE_STAFF', cooperativeId: 2, isActive: true },
   };
@@ -101,4 +120,5 @@ test('allows active staff assigned to a verified cooperative', async () => {
   await requireVerifiedCooperative(req, createResponse(), next);
 
   expect(next).toHaveBeenCalledTimes(1);
+  expect(req.cooperativeMembership).toEqual(expect.objectContaining({ cooperativeId: 2 }));
 });

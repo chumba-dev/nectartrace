@@ -14,6 +14,7 @@ import Orders from './pages/Orders';
 import NotFound from './pages/NotFound';
 import Admin from './pages/Admin';
 import VerifyEmail from './pages/VerifyEmail';
+import Notifications from './pages/Notifications';
 
 function App() {
   return (
@@ -68,6 +69,14 @@ function App() {
             element={
               <ProtectedRoute allowedRoles={['ADMIN']}>
                 <Admin />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/notifications"
+            element={
+              <ProtectedRoute>
+                <Notifications />
               </ProtectedRoute>
             }
           />

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import Button from './ui/Button';
 import { useAuth } from '../context/AuthContext';
+import NotificationBell from './NotificationBell';
 
 export default function Navbar() {
   const [open, setOpen] = useState(false);
@@ -9,9 +10,7 @@ export default function Navbar() {
   const { user, isAuthenticated, logout } = useAuth();
   const navigate = useNavigate();
   const isLanding = pathname === '/';
-  const canViewOrders = ['BUYER', 'COOPERATIVE_STAFF', 'ADMIN'].includes(
-    user?.role
-  );
+  const canViewOrders = ['BUYER', 'COOPERATIVE_STAFF'].includes(user?.role);
 
   const handleLogout = () => {
     logout();
@@ -83,66 +82,69 @@ export default function Navbar() {
           )}
         </div>
 
-        <div className="hidden items-center gap-3 md:flex">
-          {isAuthenticated ? (
-            <>
-              <span className="max-w-36 truncate text-sm text-dust">
-                {user.name}
-              </span>
-              <Button variant="ghost" size="sm" onClick={handleLogout}>
-                Sign out
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                to="/login"
-                className="border-beeswax/50 hover:border-beeswax hover:bg-beeswax/10 hover:text-beeswax"
-              >
-                Sign in
-              </Button>
-              {!isLanding && (
-                <Button size="sm" to="/register/buyer">
-                  Join as buyer
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setOpen((current) => !current)}
-          className="rounded-md p-2 text-ivory md:hidden"
-          aria-label="Toggle navigation"
-          aria-expanded={open}
-          aria-controls="mobile-navigation"
-        >
-          <svg
-            width="24"
-            height="24"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            aria-hidden="true"
-          >
-            {open ? (
+        <div className="ml-auto flex items-center gap-2 md:ml-0 md:gap-3">
+          {isAuthenticated && <NotificationBell />}
+          <div className="hidden items-center gap-3 md:flex">
+            {isAuthenticated ? (
               <>
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
+                <span className="max-w-36 truncate text-sm text-dust">
+                  {user.name}
+                </span>
+                <Button variant="ghost" size="sm" onClick={handleLogout}>
+                  Sign out
+                </Button>
               </>
             ) : (
               <>
-                <line x1="3" y1="6" x2="21" y2="6" />
-                <line x1="3" y1="12" x2="21" y2="12" />
-                <line x1="3" y1="18" x2="21" y2="18" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  to="/login"
+                  className="border-beeswax/50 hover:border-beeswax hover:bg-beeswax/10 hover:text-beeswax"
+                >
+                  Sign in
+                </Button>
+                {!isLanding && (
+                  <Button size="sm" to="/register/buyer">
+                    Join as buyer
+                  </Button>
+                )}
               </>
             )}
-          </svg>
-        </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setOpen((current) => !current)}
+            className="rounded-md p-2 text-ivory md:hidden"
+            aria-label="Toggle navigation"
+            aria-expanded={open}
+            aria-controls="mobile-navigation"
+          >
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              {open ? (
+                <>
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </>
+              ) : (
+                <>
+                  <line x1="3" y1="6" x2="21" y2="6" />
+                  <line x1="3" y1="12" x2="21" y2="12" />
+                  <line x1="3" y1="18" x2="21" y2="18" />
+                </>
+              )}
+            </svg>
+          </button>
+        </div>
       </nav>
 
       {open && (

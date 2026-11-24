@@ -11,6 +11,7 @@ jest.mock('../src/controllers/batchController', () => ({
 jest.mock('../src/controllers/orderController', () => ({
   createOrder: jest.fn((req, res) => res.status(201).json({ handler: 'createOrder' })),
   listOrders: jest.fn((req, res) => res.json({ handler: 'listOrders' })),
+  listAdminOrders: jest.fn((req, res) => res.json({ handler: 'listAdminOrders' })),
   getOrder: jest.fn((req, res) => res.json({ handler: 'getOrder' })),
   updateOrderStatus: jest.fn((req, res) => res.json({ handler: 'updateOrderStatus' })),
 }));
@@ -30,12 +31,16 @@ jest.mock('../src/controllers/harvestOfferController', () => ({
 
 jest.mock('../src/controllers/adminController', () => ({
   listUsers: jest.fn((req, res) => res.json({ handler: 'listUsers' })),
-  assignCooperative: jest.fn((req, res) => res.json({ handler: 'assignCooperative' })),
-  changeUserRole: jest.fn((req, res) => res.json({ handler: 'changeUserRole' })),
   toggleUserActive: jest.fn((req, res) => res.json({ handler: 'toggleUserActive' })),
   createCooperative: jest.fn((req, res) => res.status(201).json({ handler: 'createCooperative' })),
   verifyCooperative: jest.fn((req, res) => res.json({ handler: 'verifyCooperative' })),
   getPlatformStats: jest.fn((req, res) => res.json({ handler: 'getPlatformStats' })),
+}));
+
+jest.mock('../src/controllers/cooperativeApplicationController', () => ({
+  approveApplication: jest.fn((req, res) => res.json({ handler: 'approveApplication' })),
+  listApplications: jest.fn((req, res) => res.json({ handler: 'listApplications' })),
+  rejectApplication: jest.fn((req, res) => res.json({ handler: 'rejectApplication' })),
 }));
 
 jest.mock('../src/controllers/paymentController', () => ({
@@ -60,6 +65,16 @@ jest.mock('../src/middleware/auth', () => ({
       return res.status(403).json({ success: false });
     }
     return next();
+  }),
+  attachActiveMembershipForCooperativeStaff: jest.fn((req, res, next) => {
+    if (req.user.role === 'COOPERATIVE_STAFF') {
+      req.cooperativeMembership = { cooperativeId: 2, role: 'OWNER', isActive: true };
+    }
+    next();
+  }),
+  requireActiveCooperativeMembership: jest.fn((req, res, next) => {
+    req.cooperativeMembership = { cooperativeId: 2, role: 'OWNER', isActive: true };
+    next();
   }),
   requireVerifiedCooperative: jest.fn((req, res, next) => next()),
 }));
@@ -158,20 +173,17 @@ describe('order route role gates', () => {
     expect(orderController.getOrder).not.toHaveBeenCalled();
   });
 
-  test.each(['COOPERATIVE_STAFF', 'ADMIN'])(
-    '%s can update order status',
-    async (role) => {
-      const response = await request(app)
-        .put('/orders/9/status')
-        .set('x-test-role', role)
-        .send({ status: 'CONFIRMED' });
+  test('active cooperative staff can update order status', async () => {
+    const response = await request(app)
+      .put('/orders/9/status')
+      .set('x-test-role', 'COOPERATIVE_STAFF')
+      .send({ status: 'CONFIRMED' });
 
-      expect(response.status).toBe(200);
-      expect(orderController.updateOrderStatus).toHaveBeenCalledTimes(1);
-    }
-  );
+    expect(response.status).toBe(200);
+    expect(orderController.updateOrderStatus).toHaveBeenCalledTimes(1);
+  });
 
-  test.each(['BUYER', 'FARMER'])(
+  test.each(['BUYER', 'FARMER', 'ADMIN'])(
     '%s cannot update order status',
     async (role) => {
       const response = await request(app)
@@ -207,9 +219,8 @@ describe('harvest-offer route role gates', () => {
     expect(harvestOfferController.getMyOffer).toHaveBeenCalledTimes(1);
   });
 
-  test.each(['COOPERATIVE_STAFF', 'ADMIN'])(
-    '%s can use the explicit offer lifecycle routes',
-    async (role) => {
+  test('cooperative staff can use the explicit offer lifecycle routes', async () => {
+      const role = 'COOPERATIVE_STAFF';
       const listResponse = await request(app)
         .get('/offers')
         .set('x-test-role', role);
@@ -225,8 +236,17 @@ describe('harvest-offer route role gates', () => {
 
       expect(listResponse.status).toBe(200);
       lifecycleResponses.forEach((response) => expect(response.status).toBe(200));
-    }
-  );
+  });
+
+  test('ADMIN cannot use cooperative offer lifecycle routes', async () => {
+    const response = await request(app)
+      .put('/offers/offer-id/accept')
+      .set('x-test-role', 'ADMIN')
+      .send({});
+
+    expect(response.status).toBe(403);
+    expect(harvestOfferController.acceptOffer).not.toHaveBeenCalled();
+  });
 
   test('the same router is available under the legacy harvest-offers prefix', async () => {
     const response = await request(app)
@@ -291,9 +311,8 @@ describe('payment route role gates', () => {
     expect(paymentController.initiateOfferPayout).not.toHaveBeenCalled();
   });
 
-  test.each(['COOPERATIVE_STAFF', 'ADMIN'])(
-    '%s can initiate a payout',
-    async (role) => {
+  test('cooperative staff can initiate a payout', async () => {
+      const role = 'COOPERATIVE_STAFF';
       const response = await request(app)
         .post('/payments/offers/offer-id/payout')
         .set('x-test-role', role)
@@ -301,6 +320,39 @@ describe('payment route role gates', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.handler).toBe('initiateOfferPayout');
-    }
-  );
+  });
+
+  test('ADMIN cannot initiate a cooperative payout', async () => {
+    const response = await request(app)
+      .post('/payments/offers/offer-id/payout')
+      .set('x-test-role', 'ADMIN')
+      .send({ reference: 'PAY-1' });
+
+    expect(response.status).toBe(403);
+    expect(paymentController.initiateOfferPayout).not.toHaveBeenCalled();
+  });
+});
+
+test('admin role and cooperative assignment routes were removed', async () => {
+  const roleResponse = await request(app)
+    .put('/admin/users/9/role')
+    .set('x-test-role', 'ADMIN')
+    .send({ role: 'BUYER' });
+  const cooperativeResponse = await request(app)
+    .put('/admin/users/9/cooperative')
+    .set('x-test-role', 'ADMIN')
+    .send({ cooperativeId: 2 });
+
+  expect(roleResponse.status).toBe(404);
+  expect(cooperativeResponse.status).toBe(404);
+});
+
+test('GET /admin/orders is a dedicated read-only admin order list', async () => {
+  const response = await request(app)
+    .get('/admin/orders?status=PENDING')
+    .set('x-test-role', 'ADMIN');
+
+  expect(response.status).toBe(200);
+  expect(response.body.handler).toBe('listAdminOrders');
+  expect(orderController.listAdminOrders).toHaveBeenCalledTimes(1);
 });

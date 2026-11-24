@@ -74,10 +74,16 @@ function createResponse() {
   return res;
 }
 
-async function runCreate({ body = validBody, user } = {}) {
+async function runCreate({ body = validBody, user, cooperativeMembership } = {}) {
+  const currentUser = user || { id: 5, role: 'COOPERATIVE_STAFF', cooperativeId: 2 };
   const req = {
     body: { ...body },
-    user: user || { id: 5, role: 'COOPERATIVE_STAFF', cooperativeId: 2 },
+    user: currentUser,
+    cooperativeMembership: cooperativeMembership === undefined
+      ? (currentUser.role === 'COOPERATIVE_STAFF'
+        ? { cooperativeId: 2, role: 'OWNER', isActive: true }
+        : null)
+      : cooperativeMembership,
   };
   const res = createResponse();
   const next = jest.fn();
@@ -350,22 +356,20 @@ test('keeps reservations when final compare-and-set count conflicts', async () =
   expect(mockPrisma.offer.updateMany).toHaveBeenCalledTimes(2);
 });
 
-test('ADMIN must explicitly select a verified cooperative', async () => {
+test('ADMIN cannot create a batch without a cooperative membership', async () => {
   const { res } = await runCreate({ user: { id: 1, role: 'ADMIN', cooperativeId: null } });
 
-  expect(res.status).toHaveBeenCalledWith(400);
-  expect(res.json.mock.calls[0][0].code).toBe('COOPERATIVE_REQUIRED');
+  expect(res.status).toHaveBeenCalledWith(403);
+  expect(res.json.mock.calls[0][0].code).toBe('NO_COOPERATIVE');
   expect(mockPrisma.cooperative.findUnique).not.toHaveBeenCalled();
 });
 
-test('ADMIN resolves the supplied verified cooperative before loading lots', async () => {
-  await runCreate({
-    body: { ...validBody, cooperativeId: '2' },
-    user: { id: 1, role: 'ADMIN', cooperativeId: null },
-  });
+test('staff cannot select a cooperative outside their active membership', async () => {
+  const { res } = await runCreate({ body: { ...validBody, cooperativeId: '3' } });
 
-  expect(mockPrisma.cooperative.findUnique).toHaveBeenCalledWith({ where: { id: 2 } });
-  expect(mockBlockchain.recordBatchOnChain).toHaveBeenCalledTimes(1);
+  expect(res.status).toHaveBeenCalledWith(403);
+  expect(res.json.mock.calls[0][0].code).toBe('COOPERATIVE_SCOPE_DENIED');
+  expect(mockBlockchain.recordBatchOnChain).not.toHaveBeenCalled();
 });
 
 test('GET /batches/:batchId/verify is public and returns aggregate details plus hash', async () => {

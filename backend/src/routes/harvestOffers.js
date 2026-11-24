@@ -14,7 +14,7 @@ const {
 const {
   authenticate,
   authorize,
-  requireVerifiedCooperative,
+  requireActiveCooperativeMembership,
 } = require('../middleware/auth');
 
 const router = express.Router();
@@ -24,8 +24,8 @@ router.get('/my', authorize('FARMER'), listMyOffers);
 router.get('/my/:id', authorize('FARMER'), getMyOffer);
 
 const manageOffer = [
-  authorize('COOPERATIVE_STAFF', 'ADMIN'),
-  requireVerifiedCooperative,
+  authorize('COOPERATIVE_STAFF'),
+  requireActiveCooperativeMembership,
 ];
 
 router.get('/', ...manageOffer, listOffers);

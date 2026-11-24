@@ -3,6 +3,8 @@ const blockchain = require('../config/blockchain');
 const logger = require('../utils/logger');
 const { ethers } = require('ethers');
 
+const USER_ROLES = ['FARMER', 'COOPERATIVE_STAFF', 'BUYER', 'ADMIN', 'CONSUMER'];
+
 function parsePositiveInteger(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
@@ -36,7 +38,15 @@ function rejectSelfManagement(req, res, userId, action) {
 // GET /api/admin/users
 async function listUsers(req, res, next) {
   try {
+    const { role } = req.query;
+    if (role !== undefined && !USER_ROLES.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: `role must be one of: ${USER_ROLES.join(', ')}`,
+      });
+    }
     const users = await prisma.user.findMany({
+      where: role ? { role } : {},
       select: {
         id: true,
         name: true,
@@ -49,102 +59,13 @@ async function listUsers(req, res, next) {
         cooperative: {
           select: { id: true, name: true, village: true },
         },
+        cooperativeMembership: {
+          select: { role: true, isActive: true, cooperativeId: true },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
     res.json({ success: true, data: users });
-  } catch (err) {
-    next(err);
-  }
-}
-
-// PUT /api/admin/users/:id/cooperative
-async function assignCooperative(req, res, next) {
-  try {
-    const userId = parsePositiveInteger(req.params.id);
-    const { cooperativeId } = req.body;
-    const parsedCooperativeId = parsePositiveInteger(cooperativeId);
-
-    if (!userId || !parsedCooperativeId) {
-      return res.status(400).json({
-        success: false,
-        message: 'User and cooperative IDs must be positive integers',
-      });
-    }
-    if (rejectSelfManagement(req, res, userId, 'assign a cooperative to')) return;
-
-    const targetUser = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { id: true, role: true },
-    });
-    if (!targetUser) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    if (targetUser.role !== 'COOPERATIVE_STAFF') {
-      return res.status(400).json({
-        success: false,
-        message: 'Only cooperative staff accounts can be assigned to a cooperative',
-      });
-    }
-
-    const coop = await prisma.cooperative.findUnique({
-      where: { id: parsedCooperativeId },
-    });
-    if (!coop) {
-      return res.status(404).json({
-        success: false,
-        message: 'Cooperative not found',
-      });
-    }
-
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: { cooperativeId: parsedCooperativeId },
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        role: true,
-        cooperativeId: true,
-        cooperative: { select: { id: true, name: true } },
-      },
-    });
-
-    res.json({ success: true, data: user });
-  } catch (err) {
-    next(err);
-  }
-}
-
-// PUT /api/admin/users/:id/role
-async function changeUserRole(req, res, next) {
-  try {
-    const userId = parsePositiveInteger(req.params.id);
-    const { role } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ success: false, message: 'User ID must be a positive integer' });
-    }
-    if (rejectSelfManagement(req, res, userId, 'change the role of')) return;
-
-    const allowed = ['FARMER', 'COOPERATIVE_STAFF', 'BUYER', 'CONSUMER'];
-    if (!allowed.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: `Role must be one of: ${allowed.join(', ')}`,
-      });
-    }
-
-    const user = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        role,
-        cooperativeId: null,
-      },
-      select: { id: true, name: true, role: true, cooperativeId: true },
-    });
-
-    res.json({ success: true, data: user });
   } catch (err) {
     next(err);
   }
@@ -305,12 +226,27 @@ async function verifyCooperative(req, res, next) {
 // GET /api/admin/stats
 async function getPlatformStats(req, res, next) {
   try {
-    const [users, cooperatives, batches, listings, orders] = await Promise.all([
+    const [
+      users,
+      cooperatives,
+      batches,
+      listings,
+      orders,
+      pendingCooperativeApplications,
+      unreadAdminNotifications,
+    ] = await Promise.all([
       prisma.user.count(),
       prisma.cooperative.count(),
       prisma.honeyBatch.count(),
       prisma.listing.count(),
       prisma.order.count(),
+      prisma.cooperativeApplication.count({ where: { status: 'PENDING' } }),
+      prisma.notificationRecipient.count({
+        where: {
+          readAt: null,
+          user: { role: 'ADMIN', isActive: true },
+        },
+      }),
     ]);
 
     const totalWeight = await prisma.honeyBatch.aggregate({
@@ -325,6 +261,8 @@ async function getPlatformStats(req, res, next) {
         batches,
         listings,
         orders,
+        pendingCooperativeApplications,
+        unreadAdminNotifications,
         totalWeightKg: totalWeight._sum.weightKg || 0,
       },
     });
@@ -335,8 +273,6 @@ async function getPlatformStats(req, res, next) {
 
 module.exports = {
   listUsers,
-  assignCooperative,
-  changeUserRole,
   toggleUserActive,
   createCooperative,
   verifyCooperative,

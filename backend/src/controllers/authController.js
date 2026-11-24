@@ -43,6 +43,14 @@ const AUTH_USER_SELECT = {
   createdAt: true,
   updatedAt: true,
   cooperative: { select: SAFE_COOPERATIVE_SELECT },
+  cooperativeMembership: {
+    select: {
+      id: true,
+      cooperativeId: true,
+      role: true,
+      isActive: true,
+    },
+  },
 };
 let googleClient;
 
@@ -77,6 +85,9 @@ function publicUser(user) {
     role: user.role,
     cooperativeId: user.cooperativeId,
     ...(user.cooperative !== undefined && { cooperative: publicCooperative(user.cooperative) }),
+    ...(user.cooperativeMembership !== undefined && {
+      cooperativeMembership: user.cooperativeMembership,
+    }),
     ...(user.walletAddress !== undefined && { walletAddress: user.walletAddress }),
     ...(user.createdAt !== undefined && { createdAt: user.createdAt }),
     emailVerifiedAt: user.emailVerifiedAt ?? null,

@@ -1,6 +1,6 @@
 const mockPrisma = {
   user: {
-    findUnique: jest.fn(),
+    findMany: jest.fn(),
     update: jest.fn(),
   },
   cooperative: {
@@ -22,8 +22,7 @@ jest.mock('../src/utils/logger', () => ({
 }));
 
 const {
-  assignCooperative,
-  changeUserRole,
+  listUsers,
   toggleUserActive,
   createCooperative,
   verifyCooperative,
@@ -36,10 +35,11 @@ function createResponse() {
   return res;
 }
 
-function createRequest({ currentUserId = 1, targetUserId = 2, body = {} } = {}) {
+function createRequest({ currentUserId = 1, targetUserId = 2, body = {}, query = {} } = {}) {
   return {
     params: { id: String(targetUserId) },
     body,
+    query,
     user: { id: currentUserId, role: 'ADMIN' },
   };
 }
@@ -52,125 +52,24 @@ beforeEach(() => {
   });
 });
 
-test.each([
-  ['assign a cooperative to', assignCooperative, { cooperativeId: 3 }],
-  ['change the role of', changeUserRole, { role: 'BUYER' }],
-  ['change the active status of', toggleUserActive, { isActive: false }],
-])('prevents an administrator from trying to %s their own account', async (action, handler, body) => {
-  const req = createRequest({ currentUserId: 1, targetUserId: 1, body });
+test('prevents an administrator from changing their own active status', async () => {
+  const req = createRequest({
+    currentUserId: 1,
+    targetUserId: 1,
+    body: { isActive: false },
+  });
   const res = createResponse();
   const next = jest.fn();
 
-  await handler(req, res, next);
+  await toggleUserActive(req, res, next);
 
   expect(res.status).toHaveBeenCalledWith(403);
   expect(res.json).toHaveBeenCalledWith({
     success: false,
-    message: `Administrators cannot ${action} their own account`,
+    message: 'Administrators cannot change the active status of their own account',
   });
   expect(mockPrisma.user.update).not.toHaveBeenCalled();
   expect(next).not.toHaveBeenCalled();
-});
-
-test('rejects cooperative assignment for an account that is not cooperative staff', async () => {
-  mockPrisma.user.findUnique.mockResolvedValue({ id: 2, role: 'BUYER' });
-  const req = createRequest({ body: { cooperativeId: 3 } });
-  const res = createResponse();
-  const next = jest.fn();
-
-  await assignCooperative(req, res, next);
-
-  expect(res.status).toHaveBeenCalledWith(400);
-  expect(res.json).toHaveBeenCalledWith({
-    success: false,
-    message: 'Only cooperative staff accounts can be assigned to a cooperative',
-  });
-  expect(mockPrisma.cooperative.findUnique).not.toHaveBeenCalled();
-  expect(mockPrisma.user.update).not.toHaveBeenCalled();
-  expect(next).not.toHaveBeenCalled();
-});
-
-test('assigns an existing cooperative staff account to the selected cooperative', async () => {
-  mockPrisma.user.findUnique.mockResolvedValue({
-    id: 2,
-    role: 'COOPERATIVE_STAFF',
-  });
-  mockPrisma.cooperative.findUnique.mockResolvedValue({ id: 3, name: 'Highlands' });
-  mockPrisma.user.update.mockResolvedValue({
-    id: 2,
-    name: 'Staff Member',
-    role: 'COOPERATIVE_STAFF',
-    cooperativeId: 3,
-  });
-  const req = createRequest({ body: { cooperativeId: 3 } });
-  const res = createResponse();
-  const next = jest.fn();
-
-  await assignCooperative(req, res, next);
-
-  expect(mockPrisma.user.update).toHaveBeenCalledWith(expect.objectContaining({
-    where: { id: 2 },
-    data: { cooperativeId: 3 },
-  }));
-  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
-  expect(next).not.toHaveBeenCalled();
-});
-
-test('clears cooperative membership whenever an administrator changes another account role', async () => {
-  mockPrisma.user.update.mockResolvedValue({
-    id: 2,
-    name: 'Former Staff',
-    role: 'BUYER',
-    cooperativeId: null,
-  });
-  const req = createRequest({ body: { role: 'BUYER' } });
-  const res = createResponse();
-  const next = jest.fn();
-
-  await changeUserRole(req, res, next);
-
-  expect(mockPrisma.user.update).toHaveBeenCalledWith({
-    where: { id: 2 },
-    data: { role: 'BUYER', cooperativeId: null },
-    select: { id: true, name: true, role: true, cooperativeId: true },
-  });
-  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
-  expect(next).not.toHaveBeenCalled();
-});
-
-test('rejects ADMIN when changing another account role', async () => {
-  const req = createRequest({ body: { role: 'ADMIN' } });
-  const res = createResponse();
-  const next = jest.fn();
-
-  await changeUserRole(req, res, next);
-
-  expect(res.status).toHaveBeenCalledWith(400);
-  expect(res.json).toHaveBeenCalledWith({
-    success: false,
-    message: 'Role must be one of: FARMER, COOPERATIVE_STAFF, BUYER, CONSUMER',
-  });
-  expect(mockPrisma.user.update).not.toHaveBeenCalled();
-  expect(next).not.toHaveBeenCalled();
-});
-
-test('allows an administrator to change another account to CONSUMER', async () => {
-  mockPrisma.user.update.mockResolvedValue({
-    id: 2,
-    name: 'Consumer',
-    role: 'CONSUMER',
-    cooperativeId: null,
-  });
-  const req = createRequest({ body: { role: 'CONSUMER' } });
-  const res = createResponse();
-  const next = jest.fn();
-
-  await changeUserRole(req, res, next);
-
-  expect(mockPrisma.user.update).toHaveBeenCalledWith(expect.objectContaining({
-    data: { role: 'CONSUMER', cooperativeId: null },
-  }));
-  expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
 });
 
 test('requires a boolean when changing another account active status', async () => {
@@ -187,6 +86,31 @@ test('requires a boolean when changing another account active status', async () 
   });
   expect(mockPrisma.user.update).not.toHaveBeenCalled();
   expect(next).not.toHaveBeenCalled();
+});
+
+test('lists users with an optional fixed global role filter and no secret fields', async () => {
+  mockPrisma.user.findMany.mockResolvedValue([]);
+  const req = createRequest({ query: { role: 'COOPERATIVE_STAFF' } });
+  const res = createResponse();
+  const next = jest.fn();
+
+  await listUsers(req, res, next);
+
+  const query = mockPrisma.user.findMany.mock.calls[0][0];
+  expect(query.where).toEqual({ role: 'COOPERATIVE_STAFF' });
+  expect(query.select).not.toHaveProperty('passwordHash');
+  expect(query.select).not.toHaveProperty('ussdPinHash');
+  expect(query.select).not.toHaveProperty('mpesaNumber');
+  expect(next).not.toHaveBeenCalled();
+});
+
+test('rejects an invalid user role filter', async () => {
+  const res = createResponse();
+
+  await listUsers(createRequest({ query: { role: 'OWNER' } }), res, jest.fn());
+
+  expect(res.status).toHaveBeenCalledWith(400);
+  expect(mockPrisma.user.findMany).not.toHaveBeenCalled();
 });
 
 test.each([-1, 100.01, 'not-a-number'])(
